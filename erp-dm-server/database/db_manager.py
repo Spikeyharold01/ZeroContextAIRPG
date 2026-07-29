@@ -197,3 +197,25 @@ class DatabaseManager:
         rows = cursor.fetchall()
         conn.close()
         return [row["name"] for row in rows]
+        
+        # ======Phyical Apperance ====
+    def get_physical_appearance(self, character_id: int) -> dict:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+        SELECT physical_description, distinguishing_features, current_clothing, 
+               voice_quality, mannerisms, race, age, height
+        FROM characters WHERE id = ?
+        """, (character_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def update_appearance(self, character_id: int, updates: dict):
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
+        values = list(updates.values()) + [character_id]
+        cursor.execute(f"UPDATE characters SET {set_clause} WHERE id = ?", values)
+        conn.commit()
+        conn.close()

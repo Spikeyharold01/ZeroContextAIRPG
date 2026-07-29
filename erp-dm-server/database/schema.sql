@@ -6,8 +6,27 @@ CREATE TABLE characters (
     name TEXT NOT NULL,
     type TEXT CHECK(type IN ('PC', 'NPC', 'Monster')) DEFAULT 'NPC',
     full_card_text TEXT,
+	    -- ===== STRUCTURED PHYSICAL APPEARANCE =====
+    race TEXT,
+    age TEXT,
+    gender TEXT,
+    height TEXT,
+    physical_description TEXT, -- "Tall, raven hair, green eyes, fair skin"
+    distinguishing_features TEXT, -- "A scar over her left eye. A small tattoo on her wrist."
+    current_clothing TEXT, -- "Wears a crimson dress that hugs her curves."
+    voice_quality TEXT, -- "Velvety, with a hint of a foreign accent."
+    mannerisms TEXT, -- "Tilts her head when curious. Twirls her hair when nervous."
+    
+    -- ===== STATIC BACKGROUND =====
+    occupation TEXT,
+    origin TEXT,
+	
+    -- ===== LOCATION =====
     current_location_id INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    
+    -- ===== META =====
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (current_location_id) REFERENCES locations(id)
 );
 
 -- 2. Locations
