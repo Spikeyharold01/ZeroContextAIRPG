@@ -135,18 +135,21 @@ CREATE TABLE conversational_facts (
     id TEXT PRIMARY KEY,
     character_id INTEGER,
     fact_text TEXT NOT NULL,
-    fact_references TEXT,            -- JSON array of keywords (renamed from 'references')
-    embedding BLOB,                   -- float32 vector
+    fact_references TEXT,
+    embedding BLOB,
     importance FLOAT DEFAULT 0.5,
     confidence FLOAT DEFAULT 0.9,
-    source_type TEXT,                 -- 'narrative', 'user', 'system'
+    source_type TEXT,                  -- 'narrative', 'user', 'system'
+    fact_type TEXT DEFAULT 'world_fact',   -- 'world_fact', 'belief_fact', 'rumor_fact'
+    source_character_id INTEGER,            -- Who expressed this belief/rumor
     created_turn INTEGER DEFAULT 0,
     last_referenced_turn INTEGER DEFAULT 0,
-    expires_at_turn INTEGER,          -- NULL = never expires
+    expires_at_turn INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_active BOOLEAN DEFAULT 1,
-    FOREIGN KEY (character_id) REFERENCES characters(id)
+    FOREIGN KEY (character_id) REFERENCES characters(id),
+    FOREIGN KEY (source_character_id) REFERENCES characters(id)
 );
 
 -- 11. EVENT LOG (major events)
