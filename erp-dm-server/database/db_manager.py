@@ -468,17 +468,24 @@ class DatabaseManager:
     # ========================================================================
 
     def get_active_facts(self, character_id: int = None) -> List[Dict]:
+        """Return all active facts. Column 'fact_references' is aliased to 'references'."""
         conn = self._get_connection()
         cursor = conn.cursor()
         if character_id:
             cursor.execute("""
-                SELECT * FROM conversational_facts 
+                SELECT id, character_id, fact_text, fact_references AS references,
+                       embedding, importance, confidence, source_type,
+                       created_turn, last_referenced_turn, expires_at_turn, is_active
+                FROM conversational_facts 
                 WHERE is_active = 1 AND character_id = ?
                 ORDER BY created_turn DESC
             """, (character_id,))
         else:
             cursor.execute("""
-                SELECT * FROM conversational_facts 
+                SELECT id, character_id, fact_text, fact_references AS references,
+                       embedding, importance, confidence, source_type,
+                       created_turn, last_referenced_turn, expires_at_turn, is_active
+                FROM conversational_facts 
                 WHERE is_active = 1
                 ORDER BY created_turn DESC
             """)
@@ -487,6 +494,7 @@ class DatabaseManager:
         result = []
         for row in rows:
             data = dict(row)
+            # Decode JSON references
             if 'references' in data and data['references']:
                 try:
                     data['references'] = json.loads(data['references'])
@@ -512,11 +520,15 @@ class DatabaseManager:
         last_referenced_turn: int = 0,
         expires_at_turn: int = None
     ):
+        """Insert a new conversational fact. DB column is 'fact_references'."""
         conn = self._get_connection()
         cursor = conn.cursor()
         
         if isinstance(references, list):
-            references = json.dumps(references)
+            references_json = json.dumps(references)
+        else:
+            references_json = references
+        
         if embedding is not None:
             embedding_bytes = EmbeddingUtils.to_bytes(embedding)
         else:
@@ -524,11 +536,11 @@ class DatabaseManager:
         
         cursor.execute("""
             INSERT OR REPLACE INTO conversational_facts 
-            (id, character_id, fact_text, references, embedding, importance, confidence,
+            (id, character_id, fact_text, fact_references, embedding, importance, confidence,
              source_type, created_turn, last_referenced_turn, expires_at_turn, is_active)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
         """, (
-            fact_id, character_id, fact_text, references, embedding_bytes,
+            fact_id, character_id, fact_text, references_json, embedding_bytes,
             importance, confidence, source_type, created_turn, last_referenced_turn, expires_at_turn
         ))
         conn.commit()
@@ -544,6 +556,7 @@ class DatabaseManager:
         last_referenced_turn: int = None,
         expires_at_turn: int = None
     ):
+        """Update an existing fact. DB column is 'fact_references'."""
         conn = self._get_connection()
         cursor = conn.cursor()
         updates = {}
@@ -551,8 +564,9 @@ class DatabaseManager:
             updates["fact_text"] = new_text
         if new_references is not None:
             if isinstance(new_references, list):
-                new_references = json.dumps(new_references)
-            updates["references"] = new_references
+                updates["fact_references"] = json.dumps(new_references)
+            else:
+                updates["fact_references"] = new_references
         if importance is not None:
             updates["importance"] = importance
         if confidence is not None:
@@ -882,7 +896,6 @@ class DatabaseManager:
         valid = self._validate_updates("combat_state", updates)
         if not valid:
             return
-        # JSON serialisation for turn_order
         if 'turn_order' in valid and isinstance(valid['turn_order'], list):
             valid['turn_order'] = json.dumps(valid['turn_order'])
         conn = self._get_connection()

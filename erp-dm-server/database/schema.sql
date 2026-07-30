@@ -130,11 +130,12 @@ CREATE TABLE scene_history (
 );
 
 -- 10. CONVERSATIONAL FACTS (with provenance)
+-- NOTE: Column name is 'fact_references' (not 'references') to avoid SQL keyword conflict
 CREATE TABLE conversational_facts (
     id TEXT PRIMARY KEY,
     character_id INTEGER,
     fact_text TEXT NOT NULL,
-    references TEXT,                  -- JSON array of keywords
+    fact_references TEXT,            -- JSON array of keywords (renamed from 'references')
     embedding BLOB,                   -- float32 vector
     importance FLOAT DEFAULT 0.5,
     confidence FLOAT DEFAULT 0.9,

@@ -3,7 +3,11 @@ from database.db_manager import DatabaseManager
 db = DatabaseManager("data/game.db")
 
 # Create a character
-char_id = db.create_character("Elara", "This is a 4000 token character card...", "NPC")
+char_id = db.create_character(
+    name="Elara",
+    character_type="NPC",
+    full_card_text="This is a 4000 token character card..."
+)
 print(f"Created character with ID: {char_id}")
 
 # Add emotional state
