@@ -69,6 +69,26 @@ class DatabaseManager:
         "ambiance_state": {
             "lighting", "weather", "soundscape", "vibe", "smell"
         }
+        "dnd_stats": {
+        "class", "subclass", "level", "experience_points",
+        "strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma",
+        "armor_class", "hp_current", "hp_max", "speed", "initiative_bonus", "proficiency_bonus",
+        "strength_save_bonus", "strength_save_proficiency",
+        "dexterity_save_bonus", "dexterity_save_proficiency",
+        "constitution_save_bonus", "constitution_save_proficiency",
+        "intelligence_save_bonus", "intelligence_save_proficiency",
+        "wisdom_save_bonus", "wisdom_save_proficiency",
+        "charisma_save_bonus", "charisma_save_proficiency",
+        "skills", "passive_perception", "darkvision",
+        "armor_proficiencies", "weapon_proficiencies", "tool_proficiencies", "language_proficiencies",
+        "spellcasting_ability", "spell_save_dc", "spell_attack_bonus",
+        "cantrips_known", "spells_known",
+        "spell_slots_level_1", "spell_slots_level_2", "spell_slots_level_3",
+        "spell_slots_level_4", "spell_slots_level_5", "spell_slots_level_6",
+        "spell_slots_level_7", "spell_slots_level_8", "spell_slots_level_9",
+        "prepared_spells", "known_spells",
+        "racial_traits", "class_features", "feats", "equipment", "maneuvers"
+        }
     }
 
     def __init__(self, db_path: str = "data/game.db"):
@@ -468,43 +488,43 @@ class DatabaseManager:
     # ========================================================================
 
     def get_active_facts(self, character_id: int = None) -> List[Dict]:
-    """Return all active facts with type and source."""
-    conn = self._get_connection()
-    cursor = conn.cursor()
-    if character_id:
-        cursor.execute("""
-            SELECT id, character_id, fact_text, fact_references AS references,
-                   embedding, importance, confidence, source_type,
-                   fact_type, source_character_id,
-                   created_turn, last_referenced_turn, expires_at_turn, is_active
-            FROM conversational_facts 
-            WHERE is_active = 1 AND character_id = ?
-            ORDER BY created_turn DESC
-        """, (character_id,))
-    else:
-        cursor.execute("""
-            SELECT id, character_id, fact_text, fact_references AS references,
-                   embedding, importance, confidence, source_type,
-                   fact_type, source_character_id,
-                   created_turn, last_referenced_turn, expires_at_turn, is_active
-            FROM conversational_facts 
-            WHERE is_active = 1
-            ORDER BY created_turn DESC
-        """)
-    rows = cursor.fetchall()
-    conn.close()
-    result = []
-    for row in rows:
-        data = dict(row)
-        if 'references' in data and data['references']:
-            try:
-                data['references'] = json.loads(data['references'])
-            except:
-                data['references'] = []
-        if 'embedding' in data:
-            data['embedding'] = EmbeddingUtils.from_bytes(data['embedding'])
-        result.append(data)
-    return result
+        """Return all active facts with type and source."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        if character_id:
+            cursor.execute("""
+                SELECT id, character_id, fact_text, fact_references AS references,
+                       embedding, importance, confidence, source_type,
+                       fact_type, source_character_id,
+                       created_turn, last_referenced_turn, expires_at_turn, is_active
+                FROM conversational_facts 
+                WHERE is_active = 1 AND character_id = ?
+                ORDER BY created_turn DESC
+            """, (character_id,))
+        else:
+            cursor.execute("""
+                SELECT id, character_id, fact_text, fact_references AS references,
+                       embedding, importance, confidence, source_type,
+                       fact_type, source_character_id,
+                       created_turn, last_referenced_turn, expires_at_turn, is_active
+                FROM conversational_facts 
+                WHERE is_active = 1
+                ORDER BY created_turn DESC
+            """)
+        rows = cursor.fetchall()
+        conn.close()
+        result = []
+        for row in rows:
+            data = dict(row)
+            if 'references' in data and data['references']:
+                try:
+                    data['references'] = json.loads(data['references'])
+                except:
+                    data['references'] = []
+            if 'embedding' in data:
+                data['embedding'] = EmbeddingUtils.from_bytes(data['embedding'])
+            result.append(data)
+        return result
 
     def insert_conversational_fact(
         self,
@@ -640,71 +660,71 @@ class DatabaseManager:
         return result
         
     def get_belief_facts_by_source(self, source_character_id: int) -> List[Dict]:
-    """Get all belief facts expressed by a specific character."""
-    conn = self._get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, character_id, fact_text, fact_references AS references,
-               embedding, importance, confidence, source_type,
-               fact_type, source_character_id,
-               created_turn, last_referenced_turn, expires_at_turn, is_active
-        FROM conversational_facts 
-        WHERE is_active = 1 AND fact_type = 'belief_fact' AND source_character_id = ?
-        ORDER BY created_turn DESC
-    """, (source_character_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    result = []
-    for row in rows:
-        data = dict(row)
-        if 'references' in data and data['references']:
-            try:
-                data['references'] = json.loads(data['references'])
-            except:
-                data['references'] = []
-        if 'embedding' in data:
-            data['embedding'] = EmbeddingUtils.from_bytes(data['embedding'])
-        result.append(data)
-    return result
+        """Get all belief facts expressed by a specific character."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, character_id, fact_text, fact_references AS references,
+                   embedding, importance, confidence, source_type,
+                   fact_type, source_character_id,
+                   created_turn, last_referenced_turn, expires_at_turn, is_active
+            FROM conversational_facts 
+            WHERE is_active = 1 AND fact_type = 'belief_fact' AND source_character_id = ?
+            ORDER BY created_turn DESC
+        """, (source_character_id,))
+        rows = cursor.fetchall()
+        conn.close()
+        result = []
+        for row in rows:
+            data = dict(row)
+            if 'references' in data and data['references']:
+                try:
+                    data['references'] = json.loads(data['references'])
+                except:
+                    data['references'] = []
+            if 'embedding' in data:
+                data['embedding'] = EmbeddingUtils.from_bytes(data['embedding'])
+            result.append(data)
+        return result
     
     def get_rumor_facts(self, character_id: int = None) -> List[Dict]:
-    """Get all active rumor facts (hearsay)."""
-    conn = self._get_connection()
-    cursor = conn.cursor()
-    if character_id:
-        cursor.execute("""
-            SELECT id, character_id, fact_text, fact_references AS references,
-                   embedding, importance, confidence, source_type,
-                   fact_type, source_character_id,
-                   created_turn, last_referenced_turn, expires_at_turn, is_active
-            FROM conversational_facts 
-            WHERE is_active = 1 AND fact_type = 'rumor_fact' AND character_id = ?
-            ORDER BY created_turn DESC
-        """, (character_id,))
-    else:
-        cursor.execute("""
-            SELECT id, character_id, fact_text, fact_references AS references,
-                   embedding, importance, confidence, source_type,
-                   fact_type, source_character_id,
-                   created_turn, last_referenced_turn, expires_at_turn, is_active
-            FROM conversational_facts 
-            WHERE is_active = 1 AND fact_type = 'rumor_fact'
-            ORDER BY created_turn DESC
-        """)
-    rows = cursor.fetchall()
-    conn.close()
-    result = []
-    for row in rows:
-        data = dict(row)
-        if 'references' in data and data['references']:
-            try:
-                data['references'] = json.loads(data['references'])
-            except:
-                data['references'] = []
-        if 'embedding' in data:
-            data['embedding'] = EmbeddingUtils.from_bytes(data['embedding'])
-        result.append(data)
-    return result
+        """Get all active rumor facts (hearsay)."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        if character_id:
+            cursor.execute("""
+                SELECT id, character_id, fact_text, fact_references AS references,
+                       embedding, importance, confidence, source_type,
+                       fact_type, source_character_id,
+                       created_turn, last_referenced_turn, expires_at_turn, is_active
+                FROM conversational_facts 
+                WHERE is_active = 1 AND fact_type = 'rumor_fact' AND character_id = ?
+                ORDER BY created_turn DESC
+            """, (character_id,))
+        else:
+            cursor.execute("""
+                SELECT id, character_id, fact_text, fact_references AS references,
+                       embedding, importance, confidence, source_type,
+                       fact_type, source_character_id,
+                       created_turn, last_referenced_turn, expires_at_turn, is_active
+                FROM conversational_facts 
+                WHERE is_active = 1 AND fact_type = 'rumor_fact'
+                ORDER BY created_turn DESC
+            """)
+        rows = cursor.fetchall()
+        conn.close()
+        result = []
+        for row in rows:
+            data = dict(row)
+            if 'references' in data and data['references']:
+                try:
+                    data['references'] = json.loads(data['references'])
+                except:
+                    data['references'] = []
+            if 'embedding' in data:
+                data['embedding'] = EmbeddingUtils.from_bytes(data['embedding'])
+            result.append(data)
+        return result
     
     # ========================================================================
     # EVENT LOG
@@ -1008,5 +1028,62 @@ class DatabaseManager:
         set_clause = ", ".join([f"{key} = ?" for key in valid.keys()])
         values = list(valid.values())
         cursor.execute(f"UPDATE combat_state SET {set_clause} WHERE is_active = 1", values)
+        conn.commit()
+        conn.close()
+        
+# ========================================================================
+# D&D STATS (System-Specific)
+# ========================================================================
+
+    def get_dnd_stats(self, character_id: int) -> Optional[Dict]:
+        """Get D&D 5e stats for a character."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM dnd_stats WHERE character_id = ?", (character_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            data = dict(row)
+            # Parse JSON fields
+            for field in ['skills', 'armor_proficiencies', 'weapon_proficiencies', 
+                          'tool_proficiencies', 'language_proficiencies', 'prepared_spells',
+                          'known_spells', 'racial_traits', 'class_features', 'feats',
+                          'equipment', 'maneuvers']:
+                if field in data and data[field]:
+                    try:
+                        data[field] = json.loads(data[field])
+                    except:
+                        data[field] = []
+            return data
+        return None
+
+    def update_dnd_stats(self, character_id: int, updates: Dict):
+        """Update D&D 5e stats for a character."""
+        valid = self._validate_updates("dnd_stats", updates)
+        if not valid:
+            return
+        
+        # Handle JSON serialization for complex fields
+        for field in ['skills', 'armor_proficiencies', 'weapon_proficiencies', 
+                      'tool_proficiencies', 'language_proficiencies', 'prepared_spells',
+                      'known_spells', 'racial_traits', 'class_features', 'feats',
+                      'equipment', 'maneuvers']:
+            if field in valid and isinstance(valid[field], (list, dict)):
+                valid[field] = json.dumps(valid[field])
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM dnd_stats WHERE character_id = ?", (character_id,))
+        exists = cursor.fetchone()
+        
+        if exists:
+            set_clause = ", ".join([f"{key} = ?" for key in valid.keys()])
+            values = list(valid.values()) + [character_id]
+            cursor.execute(f"UPDATE dnd_stats SET {set_clause} WHERE character_id = ?", values)
+        else:
+            columns = ", ".join(["character_id"] + list(valid.keys()))
+            placeholders = ", ".join(["?"] + ["?"] * len(valid))
+            values = [character_id] + list(valid.values())
+            cursor.execute(f"INSERT INTO dnd_stats ({columns}) VALUES ({placeholders})", values)
         conn.commit()
         conn.close()

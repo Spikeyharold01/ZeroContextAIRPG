@@ -87,6 +87,95 @@ CREATE TABLE mechanical_stats (
     FOREIGN KEY (character_id) REFERENCES characters(id)
 );
 
+-- ============================================================
+-- D&D 5e STATS (System-Specific)
+-- ============================================================
+CREATE TABLE dnd_stats (
+    character_id INTEGER PRIMARY KEY,
+    
+    -- Class & Level
+    class TEXT,
+    subclass TEXT,
+    level INTEGER DEFAULT 1,
+    experience_points INTEGER DEFAULT 0,
+    
+    -- Ability Scores (RAW)
+    strength INTEGER DEFAULT 10,
+    dexterity INTEGER DEFAULT 10,
+    constitution INTEGER DEFAULT 10,
+    intelligence INTEGER DEFAULT 10,
+    wisdom INTEGER DEFAULT 10,
+    charisma INTEGER DEFAULT 10,
+    
+    -- Combat Stats
+    armor_class INTEGER DEFAULT 10,
+    hp_current INTEGER DEFAULT 10,
+    hp_max INTEGER DEFAULT 10,
+    speed INTEGER DEFAULT 30,
+    initiative_bonus INTEGER DEFAULT 0,
+    proficiency_bonus INTEGER DEFAULT 2,
+    
+    -- Saving Throws (with proficiency)
+    strength_save_bonus INTEGER DEFAULT 0,
+    strength_save_proficiency BOOLEAN DEFAULT 0,
+    dexterity_save_bonus INTEGER DEFAULT 0,
+    dexterity_save_proficiency BOOLEAN DEFAULT 0,
+    constitution_save_bonus INTEGER DEFAULT 0,
+    constitution_save_proficiency BOOLEAN DEFAULT 0,
+    intelligence_save_bonus INTEGER DEFAULT 0,
+    intelligence_save_proficiency BOOLEAN DEFAULT 0,
+    wisdom_save_bonus INTEGER DEFAULT 0,
+    wisdom_save_proficiency BOOLEAN DEFAULT 0,
+    charisma_save_bonus INTEGER DEFAULT 0,
+    charisma_save_proficiency BOOLEAN DEFAULT 0,
+    
+    -- Skills (JSON for flexibility)
+    skills TEXT,                    -- JSON: {"acrobatics": {"bonus": 6, "proficiency": true}, ...}
+    
+    -- Senses
+    passive_perception INTEGER DEFAULT 10,
+    darkvision INTEGER DEFAULT 0,
+    
+    -- Proficiencies (JSON arrays)
+    armor_proficiencies TEXT,       -- JSON: ["light", "medium", "heavy", "shields"]
+    weapon_proficiencies TEXT,      -- JSON: ["simple", "martial"]
+    tool_proficiencies TEXT,        -- JSON: ["thieves_tools", "smiths_tools"]
+    language_proficiencies TEXT,    -- JSON: ["Common", "Elvish", "Dwarvish"]
+    
+    -- Spellcasting
+    spellcasting_ability TEXT,      -- 'strength', 'dexterity', 'constitution', 'intelligence', 'wisdom', 'charisma'
+    spell_save_dc INTEGER DEFAULT 10,
+    spell_attack_bonus INTEGER DEFAULT 4,
+    cantrips_known INTEGER DEFAULT 0,
+    spells_known INTEGER DEFAULT 0,
+    spell_slots_level_1 INTEGER DEFAULT 0,
+    spell_slots_level_2 INTEGER DEFAULT 0,
+    spell_slots_level_3 INTEGER DEFAULT 0,
+    spell_slots_level_4 INTEGER DEFAULT 0,
+    spell_slots_level_5 INTEGER DEFAULT 0,
+    spell_slots_level_6 INTEGER DEFAULT 0,
+    spell_slots_level_7 INTEGER DEFAULT 0,
+    spell_slots_level_8 INTEGER DEFAULT 0,
+    spell_slots_level_9 INTEGER DEFAULT 0,
+    
+    -- Spells (JSON arrays)
+    prepared_spells TEXT,           -- JSON: ["spell_name_1", "spell_name_2"]
+    known_spells TEXT,              -- JSON: ["spell_name_1", "spell_name_2"]
+    
+    -- Features & Traits (JSON arrays)
+    racial_traits TEXT,             -- JSON: ["Fey Ancestry", "Darkvision"]
+    class_features TEXT,            -- JSON: ["Fighting Style", "Action Surge"]
+    feats TEXT,                     -- JSON: ["Feat Name 1", "Feat Name 2"]
+    
+    -- Equipment (JSON array)
+    equipment TEXT,                 -- JSON: [{"name": "Longsword +1", "damage_dice": "1d8+4", "attack_bonus": 7}, ...]
+    
+    -- Maneuvers (JSON array)
+    maneuvers TEXT,                 -- JSON: ["Commander's Strike", "Rally", "Trip Attack"]
+    
+    FOREIGN KEY (character_id) REFERENCES characters(id)
+);
+
 -- 6. INVENTORY
 CREATE TABLE inventory (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
