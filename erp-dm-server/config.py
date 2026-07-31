@@ -44,7 +44,7 @@ CONFIG_FILE = Path("engine.toml")
 
 
 # ==========================================================
-# Field helper
+# Field Helper
 # ==========================================================
 
 def setting(
@@ -58,11 +58,7 @@ def setting(
     choices: list[str] | None = None,
     secret: bool = False,
 ):
-    """
-    Defines a configurable field together with all metadata
-    required by the GUI.
-    """
-
+    """Defines a configurable field together with metadata required by the GUI."""
     return field(
         default=default,
         metadata={
@@ -78,12 +74,11 @@ def setting(
 
 
 # ==========================================================
-# Database
+# Configuration Dataclasses
 # ==========================================================
 
 @dataclass
 class DatabaseConfig:
-
     path: str = setting(
         "data/game.db",
         label="Database Path",
@@ -92,20 +87,12 @@ class DatabaseConfig:
     )
 
 
-# ==========================================================
-# Thresholds
-# ==========================================================
-
 @dataclass
 class MemoryConfig:
-    """
-    Controls semantic memory behaviour.
-    """
-
     similarity: float = setting(
         0.85,
         label="Fact Similarity",
-        description="Minimum cosine similarity before two facts are considered the same.",
+        description="Minimum cosine similarity before two facts are considered identical.",
         group="Memory",
         minimum=0.50,
         maximum=1.00,
@@ -120,21 +107,9 @@ class MemoryConfig:
         maximum=1.0,
     )
 
-    # Future expansion:
-    #
-    # decay_rate
-    # summarisation_interval
-    # max_active_memories
-    # importance_multiplier
-
-
-# ==========================================================
-# Token Budget
-# ==========================================================
 
 @dataclass
 class TokenConfig:
-
     prompt_target: int = setting(
         4000,
         label="Prompt Budget",
@@ -163,13 +138,43 @@ class TokenConfig:
     )
 
 
-# ==========================================================
-# AI Model
-# ==========================================================
+@dataclass
+class ServerConfig:
+    host: str = setting(
+        "0.0.0.0",
+        label="Server Host",
+        description="IP network interface for the proxy server.",
+        group="Server",
+    )
+    port: int = setting(
+        5000,
+        label="Server Port",
+        description="Network port for the proxy server.",
+        group="Server",
+        minimum=1024,
+        maximum=65535,
+    )
+
+
+@dataclass
+class RulesEngineConfig:
+    enabled: bool = setting(
+        True,
+        label="Rules Engine Enabled",
+        description="Toggle mechanical dice/rules adjudication.",
+        group="Rules Engine",
+    )
+    engine_type: str = setting(
+        "dnd_5e",
+        label="Rules System",
+        description="Active RPG rule system.",
+        group="Rules Engine",
+        choices=["dnd_5e", "pathfinder", "call_of_cthulhu", "battletech", "off"],
+    )
+
 
 @dataclass
 class ModelConfig:
-
     model_name_or_path: str = setting(
         "",
         label="Model",
@@ -202,17 +207,16 @@ class ModelConfig:
 
 
 # ==========================================================
-# Engine
+# Main Engine Config
 # ==========================================================
 
 @dataclass
 class EngineConfig:
-
     db: DatabaseConfig = field(default_factory=DatabaseConfig)
-
     memory: MemoryConfig = field(default_factory=MemoryConfig)
-
     tokens: TokenConfig = field(default_factory=TokenConfig)
+    server: ServerConfig = field(default_factory=ServerConfig)
+    rules_engine: RulesEngineConfig = field(default_factory=RulesEngineConfig)
 
     embedding_model: ModelConfig = field(
         default_factory=lambda: ModelConfig(
@@ -223,7 +227,7 @@ class EngineConfig:
 
     rules_model: ModelConfig = field(
         default_factory=lambda: ModelConfig(
-            model_name_or_path="local/1.5B-DnD-Unified",
+            model_name_or_path="models/dnd-unified-1.5b.Q4_K_M.gguf",
             device="cpu",
         )
     )
@@ -234,24 +238,60 @@ class EngineConfig:
             device="cuda",
         )
     )
-  # ==========================================================
+
+
+# ==========================================================
+# Environment Variable Overrides
+# ==========================================================
+
+ENVIRONMENT_MAP = {
+    # --- Database ---
+    "DB_PATH": ("db", "path"),
+
+    # --- Memory Thresholds ---
+    "SIMILARITY_THRESHOLD": ("memory", "similarity"),
+    "CONFIDENCE_THRESHOLD": ("memory", "confidence"),
+
+    # --- Token & Context Budget ---
+    "PROMPT_TOKEN_TARGET": ("tokens", "prompt_target"),
+    "WORKING_MEMORY_TARGET": ("tokens", "working_memory_target"),
+    "CHAT_EXCHANGE_LIMIT": ("tokens", "chat_exchange_limit"),
+
+    # --- Server Settings ---
+    "SERVER_HOST": ("server", "host"),
+    "SERVER_PORT": ("server", "port"),
+
+    # --- Rules Engine Settings ---
+    "RULES_ENGINE_ENABLED": ("rules_engine", "enabled"),
+    "RULES_ENGINE_TYPE": ("rules_engine", "engine_type"),
+
+    # --- Embedding Model ---
+    "EMBEDDING_MODEL": ("embedding_model", "model_name_or_path"),
+    "EMBEDDING_DEVICE": ("embedding_model", "device"),
+
+    # --- Rules Model ---
+    "RULES_MODEL": ("rules_model", "model_name_or_path"),
+    "RULES_DEVICE": ("rules_model", "device"),
+
+    # --- Main Storyteller Model ---
+    "STORYTELLER_MODEL": ("storyteller_model", "model_name_or_path"),
+    "STORYTELLER_DEVICE": ("storyteller_model", "device"),
+    "API_KEY": ("storyteller_model", "api_key"),
+    "API_BASE_URL": ("storyteller_model", "base_url"),
+}
+
+
+# ==========================================================
 # Utility Functions
 # ==========================================================
 
 def _dataclass_to_dict(obj):
-    """
-    Recursively converts dataclasses into dictionaries suitable
-    for writing to TOML.
-    """
-
     if not is_dataclass(obj):
         return obj
 
     result = {}
-
     for f in fields(obj):
         value = getattr(obj, f.name)
-
         if is_dataclass(value):
             result[f.name] = _dataclass_to_dict(value)
         else:
@@ -261,14 +301,7 @@ def _dataclass_to_dict(obj):
 
 
 def _update_dataclass(instance, values: dict):
-    """
-    Recursively updates a dataclass using values loaded from TOML.
-    Unknown fields are ignored so older configuration files remain
-    compatible with newer engine versions.
-    """
-
     for f in fields(instance):
-
         if f.name not in values:
             continue
 
@@ -283,20 +316,11 @@ def _update_dataclass(instance, values: dict):
         setattr(instance, f.name, new_value)
 
 
-# ==========================================================
-# Validation
-# ==========================================================
-
 def _validate(instance):
-    """
-    Validate values using metadata attached to each field.
-    """
-
     if not is_dataclass(instance):
         return
 
     for f in fields(instance):
-
         value = getattr(instance, f.name)
 
         if is_dataclass(value):
@@ -308,86 +332,19 @@ def _validate(instance):
         choices = f.metadata.get("choices")
 
         if minimum is not None and value < minimum:
-            logger.warning(
-                "%s below minimum (%s). Resetting.",
-                f.name,
-                minimum,
-            )
+            logger.warning("%s below minimum (%s). Resetting.", f.name, minimum)
             setattr(instance, f.name, minimum)
 
         if maximum is not None and value > maximum:
-            logger.warning(
-                "%s above maximum (%s). Resetting.",
-                f.name,
-                maximum,
-            )
+            logger.warning("%s above maximum (%s). Resetting.", f.name, maximum)
             setattr(instance, f.name, maximum)
 
-        if choices is not None:
-            if value not in choices:
-                logger.warning(
-                    "%s is not a valid option. Resetting to %s",
-                    f.name,
-                    choices[0],
-                )
-                setattr(instance, f.name, choices[0])
+        if choices is not None and value not in choices:
+            logger.warning("%s is not a valid option. Resetting to %s", f.name, choices[0])
+            setattr(instance, f.name, choices[0])
 
-
-# ==========================================================
-# Environment Variable Overrides
-# ==========================================================
-
-ENVIRONMENT_MAP = {
-
-    "DB_PATH":
-        ("db", "path"),
-
-"SIMILARITY_THRESHOLD":
-    ("memory", "similarity"),
-
-"CONFIDENCE_THRESHOLD":
-    ("memory", "confidence"),
-
-    "PROMPT_TOKEN_TARGET":
-        ("tokens", "prompt_target"),
-
-    "WORKING_MEMORY_TARGET":
-        ("tokens", "working_memory_target"),
-
-    "CHAT_EXCHANGE_LIMIT":
-        ("tokens", "chat_exchange_limit"),
-
-    "EMBEDDING_MODEL":
-        ("embedding_model", "model_name_or_path"),
-
-    "EMBEDDING_DEVICE":
-        ("embedding_model", "device"),
-
-    "RULES_MODEL":
-        ("rules_model", "model_name_or_path"),
-
-    "RULES_DEVICE":
-        ("rules_model", "device"),
-
-    "STORYTELLER_MODEL":
-        ("storyteller_model", "model_name_or_path"),
-
-    "STORYTELLER_DEVICE":
-        ("storyteller_model", "device"),
-
-    "API_KEY":
-        ("storyteller_model", "api_key"),
-
-"API_BASE_URL":
-        ("storyteller_model", "base_url"),
-}
-
-# ==========================================================
-# Missing File & Environment Functions
-# ==========================================================
 
 def _load_from_file(instance):
-    """Loads configuration from TOML file if it exists."""
     if not CONFIG_FILE.exists():
         return
     try:
@@ -397,8 +354,8 @@ def _load_from_file(instance):
     except Exception as e:
         logger.error("Failed to load config file: %s", e)
 
+
 def _save_to_file(instance):
-    """Saves current configuration to TOML file."""
     if tomli_w is None:
         logger.warning("tomli-w not installed. Cannot save config to %s", CONFIG_FILE)
         return
@@ -409,13 +366,12 @@ def _save_to_file(instance):
     except Exception as e:
         logger.error("Failed to save config file: %s", e)
 
+
 def _apply_environment_overrides(instance):
-    """Applies environment variables, casting them to the correct types."""
     for env_var, path in ENVIRONMENT_MAP.items():
         if env_var in os.environ:
             val = os.environ[env_var]
             
-            # Navigate to the correct nested dataclass
             target = instance
             for p in path[:-1]:
                 target = getattr(target, p)
@@ -423,60 +379,57 @@ def _apply_environment_overrides(instance):
             field_name = path[-1]
             current_val = getattr(target, field_name)
             
-            # Cast the string env var to match the existing dataclass type
             try:
-                if isinstance(current_val, int):
+                if isinstance(current_val, bool):
+                    val = str(val).lower() in ("true", "1", "yes", "y", "on")
+                elif isinstance(current_val, int):
                     val = int(val)
                 elif isinstance(current_val, float):
                     val = float(val)
-                elif isinstance(current_val, bool):
-                    val = str(val).lower() in ("true", "1", "yes", "y", "on")
                 
                 setattr(target, field_name, val)
             except ValueError:
                 logger.warning("Env var %s invalid type. Expected %s", env_var, type(current_val).__name__)
 
+
 def _log_summary(config):
-    """Prints a clean summary of the active configuration."""
-    logger.info("=== Engine Configuration Initialized ===")
+    logger.info("=== Engine Configuration Initialized (v6.0) ===")
+    logger.info("Server")
+    logger.info("  Host:Port   : %s:%d", config.server.host, config.server.port)
+    logger.info("Rules Engine")
+    logger.info("  Enabled     : %s", config.rules_engine.enabled)
+    logger.info("  System Type : %s", config.rules_engine.engine_type)
     logger.info("Memory")
-    logger.info("  Similarity : %.2f", config.memory.similarity)
-    logger.info("  Confidence : %.2f", config.memory.confidence)
+    logger.info("  Similarity  : %.2f", config.memory.similarity)
+    logger.info("  Confidence  : %.2f", config.memory.confidence)
     logger.info("Context")
-    logger.info("  Prompt Target : %d", config.tokens.prompt_target)
-    logger.info("  Working Memory : %d", config.tokens.working_memory_target)
-    logger.info("  Chat Exchanges : %d", config.tokens.chat_exchange_limit)
-    logger.info("Embedding")
-    logger.info("  %s (%s)", config.embedding_model.model_name_or_path, config.embedding_model.device)
-    logger.info("Rules")
-    logger.info("  %s (%s)", config.rules_model.model_name_or_path, config.rules_model.device)
-    logger.info("Storyteller")
-    logger.info("  %s (%s)", config.storyteller_model.model_name_or_path, config.storyteller_model.device)
+    logger.info("  Prompt Target   : %d", config.tokens.prompt_target)
+    logger.info("  Working Memory  : %d", config.tokens.working_memory_target)
+    logger.info("  Chat Exchanges  : %d", config.tokens.chat_exchange_limit)
+    logger.info("Models")
+    logger.info("  Embedding   : %s (%s)", config.embedding_model.model_name_or_path, config.embedding_model.device)
+    logger.info("  Rules       : %s (%s)", config.rules_model.model_name_or_path, config.rules_model.device)
+    logger.info("  Storyteller : %s (%s)", config.storyteller_model.model_name_or_path, config.storyteller_model.device)
     if config.storyteller_model.base_url:
-        logger.info("  Endpoint : %s", config.storyteller_model.base_url)
-    logger.info("==========================================")
+        logger.info("  Endpoint    : %s", config.storyteller_model.base_url)
+    logger.info("==============================================")
 
 
-# ------------------------------------------------------------------
-# Monkey-patch convenience methods onto EngineConfig
-# ------------------------------------------------------------------
+# ==========================================================
+# Initialization Methods
+# ==========================================================
 
 def engine_load(cls):
     config = cls()
-
     _load_from_file(config)
-
     _apply_environment_overrides(config)
-
     _validate(config)
 
-    # Automatically create a config file on first run
     if not CONFIG_FILE.exists():
         logger.info("Creating default engine.toml")
         _save_to_file(config)
 
     _log_summary(config)
-
     return config
 
 
@@ -489,28 +442,12 @@ EngineConfig.load = classmethod(engine_load)
 EngineConfig.save = engine_save
 
 
-# ==========================================================
-# Backwards Compatibility
-# ==========================================================
-
 def auto_configure() -> EngineConfig:
-    """
-    Preserved for backwards compatibility with the
-    original engine.
-
-    Existing code can continue calling:
-
-        settings = auto_configure()
-
-    or simply:
-
-        from config import settings
-    """
     return EngineConfig.load()
 
 
 # ==========================================================
-# Singleton
+# Global Singleton
 # ==========================================================
 
 settings = auto_configure()

@@ -506,92 +506,92 @@ class DatabaseManager:
         result.append(data)
     return result
 
-def insert_conversational_fact(
-    self,
-    fact_id: str,
-    character_id: int,
-    fact_text: str,
-    references: Union[str, List[str]],
-    embedding: List[float] = None,
-    importance: float = 0.5,
-    confidence: float = 0.9,
-    source_type: str = "narrative",
-    fact_type: str = "world_fact",          # NEW
-    source_character_id: int = None,        # NEW
-    created_turn: int = 0,
-    last_referenced_turn: int = 0,
-    expires_at_turn: int = None
-):
-    """Insert a conversational fact with type and source."""
-    conn = self._get_connection()
-    cursor = conn.cursor()
-    
-    if isinstance(references, list):
-        references_json = json.dumps(references)
-    else:
-        references_json = references
-    
-    if embedding is not None:
-        embedding_bytes = EmbeddingUtils.to_bytes(embedding)
-    else:
-        embedding_bytes = None
-    
-    cursor.execute("""
-        INSERT OR REPLACE INTO conversational_facts 
-        (id, character_id, fact_text, fact_references, embedding, importance, confidence,
-         source_type, fact_type, source_character_id, created_turn, last_referenced_turn, expires_at_turn, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-    """, (
-        fact_id, character_id, fact_text, references_json, embedding_bytes,
-        importance, confidence, source_type, fact_type, source_character_id,
-        created_turn, last_referenced_turn, expires_at_turn
-    ))
-    conn.commit()
-    conn.close()
+    def insert_conversational_fact(
+        self,
+        fact_id: str,
+        character_id: int,
+        fact_text: str,
+        references: Union[str, List[str]],
+        embedding: List[float] = None,
+        importance: float = 0.5,
+        confidence: float = 0.9,
+        source_type: str = "narrative",
+        fact_type: str = "world_fact",          # NEW
+        source_character_id: int = None,        # NEW
+        created_turn: int = 0,
+        last_referenced_turn: int = 0,
+        expires_at_turn: int = None
+    ):
+        """Insert a conversational fact with type and source."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        if isinstance(references, list):
+            references_json = json.dumps(references)
+        else:
+            references_json = references
+        
+        if embedding is not None:
+            embedding_bytes = EmbeddingUtils.to_bytes(embedding)
+        else:
+            embedding_bytes = None
+        
+        cursor.execute("""
+            INSERT OR REPLACE INTO conversational_facts 
+            (id, character_id, fact_text, fact_references, embedding, importance, confidence,
+             source_type, fact_type, source_character_id, created_turn, last_referenced_turn, expires_at_turn, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        """, (
+            fact_id, character_id, fact_text, references_json, embedding_bytes,
+            importance, confidence, source_type, fact_type, source_character_id,
+            created_turn, last_referenced_turn, expires_at_turn
+        ))
+        conn.commit()
+        conn.close()
 
     def update_conversational_fact(
-    self,
-    fact_id: str,
-    new_text: str = None,
-    new_references: Union[str, List[str]] = None,
-    importance: float = None,
-    confidence: float = None,
-    last_referenced_turn: int = None,
-    expires_at_turn: int = None,
-    fact_type: str = None,              # NEW
-    source_character_id: int = None     # NEW
-):
-    """Update an existing fact. DB column is 'fact_references'."""
-    conn = self._get_connection()
-    cursor = conn.cursor()
-    updates = {}
-    
-    if new_text is not None:
-        updates["fact_text"] = new_text
-    if new_references is not None:
-        if isinstance(new_references, list):
-            updates["fact_references"] = json.dumps(new_references)
-        else:
-            updates["fact_references"] = new_references
-    if importance is not None:
-        updates["importance"] = importance
-    if confidence is not None:
-        updates["confidence"] = confidence
-    if last_referenced_turn is not None:
-        updates["last_referenced_turn"] = last_referenced_turn
-    if expires_at_turn is not None:
-        updates["expires_at_turn"] = expires_at_turn
-    if fact_type is not None:                       # NEW
-        updates["fact_type"] = fact_type
-    if source_character_id is not None:             # NEW
-        updates["source_character_id"] = source_character_id
-    
-    if updates:
-        set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
-        values = list(updates.values()) + [fact_id]
-        cursor.execute(f"UPDATE conversational_facts SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", values)
-        conn.commit()
-    conn.close()
+        self,
+        fact_id: str,
+        new_text: str = None,
+        new_references: Union[str, List[str]] = None,
+        importance: float = None,
+        confidence: float = None,
+        last_referenced_turn: int = None,
+        expires_at_turn: int = None,
+        fact_type: str = None,              # NEW
+        source_character_id: int = None     # NEW
+    ):
+        """Update an existing fact. DB column is 'fact_references'."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        updates = {}
+        
+        if new_text is not None:
+            updates["fact_text"] = new_text
+        if new_references is not None:
+            if isinstance(new_references, list):
+                updates["fact_references"] = json.dumps(new_references)
+            else:
+                updates["fact_references"] = new_references
+        if importance is not None:
+            updates["importance"] = importance
+        if confidence is not None:
+            updates["confidence"] = confidence
+        if last_referenced_turn is not None:
+            updates["last_referenced_turn"] = last_referenced_turn
+        if expires_at_turn is not None:
+            updates["expires_at_turn"] = expires_at_turn
+        if fact_type is not None:                       # NEW
+            updates["fact_type"] = fact_type
+        if source_character_id is not None:             # NEW
+            updates["source_character_id"] = source_character_id
+        
+        if updates:
+            set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
+            values = list(updates.values()) + [fact_id]
+            cursor.execute(f"UPDATE conversational_facts SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", values)
+            conn.commit()
+        conn.close()
 
     def delete_conversational_fact(self, fact_id: str):
         conn = self._get_connection()
@@ -611,34 +611,34 @@ def insert_conversational_fact(
         conn.commit()
         conn.close()
         
-def get_facts_by_type(self, character_id: int, fact_type: str = "world_fact") -> List[Dict]:
-    """Get all active facts of a specific type for a character."""
-    conn = self._get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, character_id, fact_text, fact_references AS references,
-               embedding, importance, confidence, source_type,
-               fact_type, source_character_id,
-               created_turn, last_referenced_turn, expires_at_turn, is_active
-        FROM conversational_facts 
-        WHERE is_active = 1 AND character_id = ? AND fact_type = ?
-        ORDER BY created_turn DESC
-    """, (character_id, fact_type))
-    rows = cursor.fetchall()
-    conn.close()
-    result = []
-    for row in rows:
-        data = dict(row)
-        if 'references' in data and data['references']:
-            try:
-                data['references'] = json.loads(data['references'])
-            except:
-                data['references'] = []
-        if 'embedding' in data:
-            data['embedding'] = EmbeddingUtils.from_bytes(data['embedding'])
-        result.append(data)
-    return result
-    
+    def get_facts_by_type(self, character_id: int, fact_type: str = "world_fact") -> List[Dict]:
+        """Get all active facts of a specific type for a character."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, character_id, fact_text, fact_references AS references,
+                   embedding, importance, confidence, source_type,
+                   fact_type, source_character_id,
+                   created_turn, last_referenced_turn, expires_at_turn, is_active
+            FROM conversational_facts 
+            WHERE is_active = 1 AND character_id = ? AND fact_type = ?
+            ORDER BY created_turn DESC
+        """, (character_id, fact_type))
+        rows = cursor.fetchall()
+        conn.close()
+        result = []
+        for row in rows:
+            data = dict(row)
+            if 'references' in data and data['references']:
+                try:
+                    data['references'] = json.loads(data['references'])
+                except:
+                    data['references'] = []
+            if 'embedding' in data:
+                data['embedding'] = EmbeddingUtils.from_bytes(data['embedding'])
+            result.append(data)
+        return result
+        
     def get_belief_facts_by_source(self, source_character_id: int) -> List[Dict]:
     """Get all belief facts expressed by a specific character."""
     conn = self._get_connection()
