@@ -173,6 +173,15 @@ class RulesEngineConfig:
 
 
 @dataclass
+class ParserConfig:
+    time_parser_enabled: bool = setting(
+        True,
+        label="Time Parser Enabled",
+        description="Enable deterministic time parser for 'last week', 'yesterday', etc.",
+        group="Parsing",
+    )
+
+@dataclass
 class ModelConfig:
     model_name_or_path: str = setting(
         "",
@@ -259,6 +268,7 @@ class EngineConfig:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     tokens: TokenConfig = field(default_factory=TokenConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
+	parser: ParserConfig = field(default_factory=ParserConfig)
     rules_engine: RulesEngineConfig = field(default_factory=RulesEngineConfig)
     markers: MarkerConfig = field(default_factory=MarkerConfig)  # NEW
 
@@ -329,6 +339,7 @@ ENVIRONMENT_MAP = {
     "STORYTELLER_DEVICE": ("storyteller_model", "device"),
     "API_KEY": ("storyteller_model", "api_key"),
     "API_BASE_URL": ("storyteller_model", "base_url"),
+	"TIME_PARSER_ENABLED": ("parser", "time_parser_enabled"),
 }
 
 

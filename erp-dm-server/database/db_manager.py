@@ -525,6 +525,40 @@ class DatabaseManager:
                 data['embedding'] = EmbeddingUtils.from_bytes(data['embedding'])
             result.append(data)
         return result
+		
+	def get_facts_by_day_range(self, character_id: int, start_day: int, end_day: int) -> List[Dict]:
+        """
+        Get all active facts for a character that occurred between two game days.
+        Used for temporal filtering before embedding retrieval.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, character_id, fact_text, fact_references AS references,
+                   embedding, importance, confidence, source_type,
+                   fact_type, source_character_id,
+                   created_turn, last_referenced_turn, expires_at_turn, game_day, is_active
+            FROM conversational_facts
+            WHERE is_active = 1
+              AND character_id = ?
+              AND game_day >= ?
+              AND game_day <= ?
+            ORDER BY created_turn DESC
+        """, (character_id, start_day, end_day))
+        rows = cursor.fetchall()
+        conn.close()
+        result = []
+        for row in rows:
+            data = dict(row)
+            if 'references' in data and data['references']:
+                try:
+                    data['references'] = json.loads(data['references'])
+                except:
+                    data['references'] = []
+            if 'embedding' in data:
+                data['embedding'] = EmbeddingUtils.from_bytes(data['embedding'])
+            result.append(data)
+        return result
 
     def insert_conversational_fact(
         self,

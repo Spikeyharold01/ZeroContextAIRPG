@@ -237,6 +237,7 @@ CREATE TABLE conversational_facts (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_active BOOLEAN DEFAULT 1,
+	game_day INTEGER DEFAULT 1,
     FOREIGN KEY (character_id) REFERENCES characters(id),
     FOREIGN KEY (source_character_id) REFERENCES characters(id)
 );
