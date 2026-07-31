@@ -557,6 +557,47 @@ class DatabaseManager:
             result.append(data)
         return result
 
+    def get_facts_by_day_range_with_similarity(self, character_id: int, user_embedding: List[float], start_day: int = None, end_day: int = None, limit: int = 5) -> List[Dict]:
+        """
+        Retrieve facts within optional day range and compute cosine similarity in‑process.
+        """
+        # 1. Build SQL query with optional day filter
+        query = """
+            SELECT id, character_id, fact_text, fact_references AS references,
+                   embedding, importance, confidence, source_type,
+                   fact_type, source_character_id,
+                   created_turn, last_referenced_turn, expires_at_turn, game_day, is_active
+            FROM conversational_facts
+            WHERE is_active = 1
+              AND character_id = ?
+        """
+        params = [character_id]
+        if start_day is not None and end_day is not None:
+            query += " AND game_day >= ? AND game_day <= ?"
+            params.extend([start_day, end_day])
+
+        query += " ORDER BY created_turn DESC"
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        conn.close()
+
+        # 2. Compute similarity in‑process
+        results = []
+        for row in rows:
+            data = dict(row)
+            if 'embedding' in data and data['embedding']:
+                fact_embedding = EmbeddingUtils.from_bytes(data['embedding'])
+                similarity = cosine_similarity(user_embedding, fact_embedding)
+                data['similarity'] = similarity
+                results.append(data)
+
+        # 3. Sort by similarity descending and limit
+        results.sort(key=lambda x: x['similarity'], reverse=True)
+        return results[:limit]
+
     def insert_conversational_fact(
         self,
         fact_id: str,
@@ -756,6 +797,26 @@ class DatabaseManager:
                 data['embedding'] = EmbeddingUtils.from_bytes(data['embedding'])
             result.append(data)
         return result
+
+    def get_prose_fingerprint(self, character_id: int) -> Optional[str]:
+        """Get the current prose fingerprint for a character."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT prose_fingerprint FROM characters WHERE id = ?", (character_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row["prose_fingerprint"] if row else None
+
+    def update_prose_fingerprint(self, character_id: int, fingerprint: str):
+        """Replace the current prose fingerprint with a new one."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE characters SET prose_fingerprint = ? WHERE id = ?",
+            (fingerprint, character_id)
+        )
+        conn.commit()
+        conn.close()
     
     # ========================================================================
     # EVENT LOG

@@ -25,6 +25,7 @@ CREATE TABLE characters (
     immediate_beat TEXT,
     long_arc TEXT,
     tension FLOAT DEFAULT 0.5,
+    prose_fingerprint TEXT, 
     
     -- Generic plot state (miscellaneous JSON)
     plot_state TEXT,
