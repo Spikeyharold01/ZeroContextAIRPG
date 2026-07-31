@@ -68,7 +68,7 @@ class DatabaseManager:
         },
         "ambiance_state": {
             "lighting", "weather", "soundscape", "vibe", "smell"
-        }
+        },
         "dnd_stats": {
         "class", "subclass", "level", "experience_points",
         "strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma",
@@ -493,7 +493,7 @@ class DatabaseManager:
         cursor = conn.cursor()
         if character_id:
             cursor.execute("""
-                SELECT id, character_id, fact_text, fact_references AS references,
+                SELECT id, character_id, fact_text, fact_references AS "references",
                        embedding, importance, confidence, source_type,
                        fact_type, source_character_id,
                        created_turn, last_referenced_turn, expires_at_turn, is_active
@@ -503,7 +503,7 @@ class DatabaseManager:
             """, (character_id,))
         else:
             cursor.execute("""
-                SELECT id, character_id, fact_text, fact_references AS references,
+                SELECT id, character_id, fact_text, fact_references AS "references",
                        embedding, importance, confidence, source_type,
                        fact_type, source_character_id,
                        created_turn, last_referenced_turn, expires_at_turn, is_active
@@ -525,8 +525,8 @@ class DatabaseManager:
                 data['embedding'] = EmbeddingUtils.from_bytes(data['embedding'])
             result.append(data)
         return result
-		
-	def get_facts_by_day_range(self, character_id: int, start_day: int, end_day: int) -> List[Dict]:
+        
+    def get_facts_by_day_range(self, character_id: int, start_day: int, end_day: int) -> List[Dict]:
         """
         Get all active facts for a character that occurred between two game days.
         Used for temporal filtering before embedding retrieval.
@@ -534,7 +534,7 @@ class DatabaseManager:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, character_id, fact_text, fact_references AS references,
+            SELECT id, character_id, fact_text, fact_references AS "references",
                    embedding, importance, confidence, source_type,
                    fact_type, source_character_id,
                    created_turn, last_referenced_turn, expires_at_turn, game_day, is_active
@@ -670,7 +670,7 @@ class DatabaseManager:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, character_id, fact_text, fact_references AS references,
+            SELECT id, character_id, fact_text, fact_references AS "references",
                    embedding, importance, confidence, source_type,
                    fact_type, source_character_id,
                    created_turn, last_referenced_turn, expires_at_turn, is_active
@@ -698,7 +698,7 @@ class DatabaseManager:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, character_id, fact_text, fact_references AS references,
+            SELECT id, character_id, fact_text, fact_references AS "references",
                    embedding, importance, confidence, source_type,
                    fact_type, source_character_id,
                    created_turn, last_referenced_turn, expires_at_turn, is_active
@@ -727,7 +727,7 @@ class DatabaseManager:
         cursor = conn.cursor()
         if character_id:
             cursor.execute("""
-                SELECT id, character_id, fact_text, fact_references AS references,
+                SELECT id, character_id, fact_text, fact_references AS "references",
                        embedding, importance, confidence, source_type,
                        fact_type, source_character_id,
                        created_turn, last_referenced_turn, expires_at_turn, is_active
@@ -737,7 +737,7 @@ class DatabaseManager:
             """, (character_id,))
         else:
             cursor.execute("""
-                SELECT id, character_id, fact_text, fact_references AS references,
+                SELECT id, character_id, fact_text, fact_references AS "references",
                        embedding, importance, confidence, source_type,
                        fact_type, source_character_id,
                        created_turn, last_referenced_turn, expires_at_turn, is_active
