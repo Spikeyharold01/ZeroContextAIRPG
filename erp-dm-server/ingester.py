@@ -18,7 +18,7 @@ Markers (configurable via settings):
 import re
 import logging
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from config import settings
 
@@ -35,7 +35,7 @@ class IngestedContext:
     character_name: str
     scenario: str
     examples: str
-    user_character: str      # NEW: The user's own character stats
+    user_character: str
     is_first_message: bool
     raw_system_prompts: List[Dict[str, str]]
     sampling_params: Dict[str, Any]
@@ -49,14 +49,14 @@ class Ingester:
     """
 
     def __init__(self):
-        # Load markers directly from settings (config.py must define them)
-        self.marker_character_card = settings.MARKER_CHARACTER_CARD
-        self.marker_system_prompt = settings.MARKER_SYSTEM_PROMPT
-        self.marker_scenario = settings.MARKER_SCENARIO
-        self.marker_examples = settings.MARKER_EXAMPLES
-        self.marker_user = settings.MARKER_USER  # NEW
+        # Load markers from config (correct nested access)
+        self.marker_character_card = settings.markers.character_card
+        self.marker_system_prompt = settings.markers.system_prompt
+        self.marker_scenario = settings.markers.scenario
+        self.marker_examples = settings.markers.examples
+        self.marker_user = settings.markers.user_character
 
-        # Optional fallback patterns if marker is not found
+        # Fallback patterns for character card detection (if marker missing)
         self.fallback_patterns = {
             "character_card": [
                 r"\[Identity:.*?\]",
@@ -65,34 +65,26 @@ class Ingester:
             ]
         }
 
+        logger.info(f"Ingester initialized with markers: "
+                    f"card='{self.marker_character_card}', "
+                    f"user='{self.marker_user}'")
+
     def ingest(self, payload: Dict[str, Any]) -> IngestedContext:
         """
         Main entry point: process the raw SillyTavern payload.
-
-        Args:
-            payload: The full JSON payload from SillyTavern (OpenAI format).
-
-        Returns:
-            IngestedContext: Structured data extracted from the payload.
-
-        Raises:
-            ValueError: If the required character card section is missing.
         """
         messages = payload.get("messages", [])
 
-        # 1. Extract basic fields
         user_message = self._extract_user_message(messages)
         chat_history = self._extract_chat_history(messages)
         system_prompts = self._extract_system_prompts(messages)
         is_first_message = self._is_first_message(chat_history)
-
-        # 2. Extract optional sampling parameters
         sampling_params = self._extract_sampling_params(payload)
 
-        # 3. Extract sections using markers
+        # Extract sections using markers
         extracted = self._extract_sections(system_prompts)
 
-        # 4. Validate required sections
+        # Validate required sections
         errors = []
         warnings = []
 
@@ -112,42 +104,29 @@ class Ingester:
 
         scenario = extracted.get("scenario", "")
         if not scenario:
-            logger.info(
-                f"Optional section '{self.marker_scenario}' not found. "
-                "Proceeding without a scenario."
-            )
+            logger.info(f"Optional section '{self.marker_scenario}' not found.")
 
         examples = extracted.get("examples", "")
         if not examples:
-            logger.info(
-                f"Optional section '{self.marker_examples}' not found. "
-                "Proceeding without examples."
-            )
+            logger.info(f"Optional section '{self.marker_examples}' not found.")
 
         user_character = extracted.get("user_character", "")
         if not user_character:
-            logger.info(
-                f"Optional section '{self.marker_user}' not found. "
-                "Proceeding without user character stats."
-            )
+            logger.info(f"Optional section '{self.marker_user}' not found.")
 
-        # 5. If errors, raise ValueError with clear message
         if errors:
             error_msg = "\n".join(errors)
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-        # Log any warnings
         for warn in warnings:
             logger.warning(warn)
 
-        # 6. Extract character name from the card
         character_name = self._extract_name_from_card(character_card_text)
         if character_name == "Unknown":
             logger.warning("Could not extract character name from the card.")
 
-        # 7. Build the context object
-        context = IngestedContext(
+        return IngestedContext(
             user_message=user_message,
             chat_history=chat_history,
             system_prompt=system_prompt,
@@ -155,30 +134,15 @@ class Ingester:
             character_name=character_name,
             scenario=scenario,
             examples=examples,
-            user_character=user_character,  # NEW
+            user_character=user_character,
             is_first_message=is_first_message,
             raw_system_prompts=system_prompts,
             sampling_params=sampling_params,
             raw_payload=payload,
         )
 
-        logger.info(
-            f"Ingested message from '{character_name}'. "
-            f"First message: {is_first_message}. "
-            f"Card length: {len(character_card_text)} chars."
-        )
-
-        return context
-
-    # ------------------------------------------------------------------
-    # Extraction helpers
-    # ------------------------------------------------------------------
-
     def _extract_sections(self, system_prompts: List[Dict]) -> Dict[str, str]:
-        """
-        Extract each section by looking for the marker at the start of the content.
-        Returns a dict with keys: character_card, system_prompt, scenario, examples, user_character.
-        """
+        """Extract each section by looking for the marker at the start."""
         result = {
             "character_card": "",
             "system_prompt": "",
@@ -189,7 +153,6 @@ class Ingester:
 
         for prompt in system_prompts:
             content = prompt.get("content", "")
-            # Check each marker
             if content.startswith(self.marker_character_card):
                 result["character_card"] = content[len(self.marker_character_card):].strip()
             elif content.startswith(self.marker_system_prompt):
@@ -200,13 +163,6 @@ class Ingester:
                 result["examples"] = content[len(self.marker_examples):].strip()
             elif content.startswith(self.marker_user):
                 result["user_character"] = content[len(self.marker_user):].strip()
-
-        # If character card is still empty, try fallback patterns (optional)
-        if not result["character_card"]:
-            fallback_card = self._try_fallback_character_card(system_prompts)
-            if fallback_card:
-                result["character_card"] = fallback_card
-                logger.info("Found character card using fallback patterns.")
 
         return result
 
