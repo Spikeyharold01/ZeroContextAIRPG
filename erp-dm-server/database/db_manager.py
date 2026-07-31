@@ -527,14 +527,11 @@ class DatabaseManager:
         return result
         
     def get_facts_by_day_range(self, character_id: int, start_day: int, end_day: int) -> List[Dict]:
-        """
-        Get all active facts for a character that occurred between two game days.
-        Used for temporal filtering before embedding retrieval.
-        """
+        """Get facts within a day range."""
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, character_id, fact_text, fact_references AS "references",
+            SELECT id, character_id, fact_text, fact_references AS references,
                    embedding, importance, confidence, source_type,
                    fact_type, source_character_id,
                    created_turn, last_referenced_turn, expires_at_turn, game_day, is_active
@@ -899,8 +896,27 @@ class DatabaseManager:
             "current_location_id": None,
             "current_scene_type": "narrative",
             "combat_active": 0,
-            "current_turn": 0
+            "current_turn": 0,
+            "game_day": 1, 
         }
+    def update_game_day(self, new_day: int):
+        """Update the in-game day counter."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM game_state WHERE id = 1")
+        if not cursor.fetchone():
+            cursor.execute("INSERT INTO game_state (id, game_day) VALUES (1, ?)", (new_day,))
+        else:
+            cursor.execute("UPDATE game_state SET game_day = ? WHERE id = 1", (new_day,))
+        conn.commit()
+        conn.close()
+
+    def advance_game_day(self) -> int:
+        """Advance the in-game day counter by 1."""
+        state = self.get_game_state()
+        new_day = state.get("game_day", 1) + 1
+        self.update_game_day(new_day)
+        return new_day
 
     def update_game_state(self, updates: Dict):
         valid = self._validate_updates("game_state", updates)

@@ -302,6 +302,7 @@ CREATE TABLE game_state (
     current_scene_type TEXT,
     combat_active BOOLEAN DEFAULT 0,
     current_turn INTEGER DEFAULT 0,
+	game_day INTEGER DEFAULT 1, 
     FOREIGN KEY (current_location_id) REFERENCES locations(id)
 );
 
