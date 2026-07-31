@@ -268,7 +268,7 @@ class EngineConfig:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     tokens: TokenConfig = field(default_factory=TokenConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
-	parser: ParserConfig = field(default_factory=ParserConfig)
+    parser: ParserConfig = field(default_factory=ParserConfig)
     rules_engine: RulesEngineConfig = field(default_factory=RulesEngineConfig)
     markers: MarkerConfig = field(default_factory=MarkerConfig)  # NEW
 
