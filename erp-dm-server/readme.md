@@ -440,3 +440,12 @@ Modular Rules Engine – Users can disable rules entirely for pure narrative ERP
 Save & Load – Campaigns can be exported and imported, preserving all state and configuration.
 
 The system is ready to implement.
+
+UPDATE 1
+
+Users will need to add specific tags to their character cards, system prompts etc
+=CHARCTER CARD= A Character card and Stats
+=SYSTEM PROMPT= System prompt
+=SCENARIO= - The current scenario
+=EXAMPLES= - Examples of chat
+=USER= - users Stats

@@ -4,7 +4,6 @@ config.py
 Central configuration system for the Adaptive RPG Engine.
 
 Configuration precedence:
-
 1. Environment Variables (highest priority)
 2. engine.toml
 3. Dataclass defaults
@@ -207,6 +206,50 @@ class ModelConfig:
 
 
 # ==========================================================
+# Prompt Markers (NEW)
+# ==========================================================
+
+@dataclass
+class MarkerConfig:
+    """User-defined markers for parsing SillyTavern system prompts."""
+
+    character_card: str = setting(
+        "=CHARACTER CARD=",
+        label="Character Card Marker",
+        description="Marker that identifies the character card section.",
+        group="Markers",
+    )
+
+    system_prompt: str = setting(
+        "=SYSTEM PROMPT=",
+        label="System Prompt Marker",
+        description="Marker that identifies the system prompt section.",
+        group="Markers",
+    )
+
+    scenario: str = setting(
+        "=SCENARIO=",
+        label="Scenario Marker",
+        description="Marker that identifies the scenario section.",
+        group="Markers",
+    )
+
+    examples: str = setting(
+        "=EXAMPLES=",
+        label="Examples Marker",
+        description="Marker that identifies the example messages section.",
+        group="Markers",
+    )
+
+    user_character: str = setting(
+        "=USER=",
+        label="User Character Marker",
+        description="Marker that identifies the user's own character stats.",
+        group="Markers",
+    )
+
+
+# ==========================================================
 # Main Engine Config
 # ==========================================================
 
@@ -217,6 +260,7 @@ class EngineConfig:
     tokens: TokenConfig = field(default_factory=TokenConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     rules_engine: RulesEngineConfig = field(default_factory=RulesEngineConfig)
+    markers: MarkerConfig = field(default_factory=MarkerConfig)  # NEW
 
     embedding_model: ModelConfig = field(
         default_factory=lambda: ModelConfig(
@@ -264,6 +308,13 @@ ENVIRONMENT_MAP = {
     # --- Rules Engine Settings ---
     "RULES_ENGINE_ENABLED": ("rules_engine", "enabled"),
     "RULES_ENGINE_TYPE": ("rules_engine", "engine_type"),
+
+    # --- Markers (NEW) ---
+    "MARKER_CHARACTER_CARD": ("markers", "character_card"),
+    "MARKER_SYSTEM_PROMPT": ("markers", "system_prompt"),
+    "MARKER_SCENARIO": ("markers", "scenario"),
+    "MARKER_EXAMPLES": ("markers", "examples"),
+    "MARKER_USER": ("markers", "user_character"),
 
     # --- Embedding Model ---
     "EMBEDDING_MODEL": ("embedding_model", "model_name_or_path"),
@@ -406,6 +457,12 @@ def _log_summary(config):
     logger.info("  Prompt Target   : %d", config.tokens.prompt_target)
     logger.info("  Working Memory  : %d", config.tokens.working_memory_target)
     logger.info("  Chat Exchanges  : %d", config.tokens.chat_exchange_limit)
+    logger.info("Markers")
+    logger.info("  Character Card  : %s", config.markers.character_card)
+    logger.info("  System Prompt   : %s", config.markers.system_prompt)
+    logger.info("  Scenario        : %s", config.markers.scenario)
+    logger.info("  Examples        : %s", config.markers.examples)
+    logger.info("  User Character  : %s", config.markers.user_character)
     logger.info("Models")
     logger.info("  Embedding   : %s (%s)", config.embedding_model.model_name_or_path, config.embedding_model.device)
     logger.info("  Rules       : %s (%s)", config.rules_model.model_name_or_path, config.rules_model.device)
@@ -451,3 +508,14 @@ def auto_configure() -> EngineConfig:
 # ==========================================================
 
 settings = auto_configure()
+
+
+# ==========================================================
+# Convenience Aliases (for backward compatibility with ingester)
+# ==========================================================
+
+MARKER_CHARACTER_CARD = settings.markers.character_card
+MARKER_SYSTEM_PROMPT = settings.markers.system_prompt
+MARKER_SCENARIO = settings.markers.scenario
+MARKER_EXAMPLES = settings.markers.examples
+MARKER_USER = settings.markers.user_character
