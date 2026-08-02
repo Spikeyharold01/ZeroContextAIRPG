@@ -1,0 +1,1 @@
+ALTER TABLE game_state ADD COLUMN game_day INTEGER DEFAULT 1;

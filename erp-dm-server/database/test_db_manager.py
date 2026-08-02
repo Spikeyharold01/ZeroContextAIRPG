@@ -8,7 +8,7 @@ from pathlib import Path
 # Add the database directory to Python's search path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from db_manager import DatabaseManager
+from db_manager import DatabaseManager, cosine_similarity
 
 # ==========================================
 # FIXTURE: FRESH DATABASE PER TEST
@@ -31,6 +31,49 @@ def test_schema_executes_cleanly(db):
     """Test 1: Schema executes cleanly into a new database."""
     names = db.get_all_character_names()
     assert len(names) == 0  # No crash means schema executed successfully
+
+    conn = db._get_connection()
+    version = conn.execute(
+        "SELECT version FROM schema_version WHERE id = 1"
+    ).fetchone()["version"]
+    conn.close()
+    assert version == DatabaseManager.LATEST_SCHEMA_VERSION
+
+
+def test_legacy_database_is_migrated_without_losing_data(tmp_path):
+    db_file = tmp_path / "legacy_game.db"
+    conn = sqlite3.connect(db_file)
+    conn.executescript("""
+        CREATE TABLE characters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL
+        );
+        CREATE TABLE game_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            current_turn INTEGER DEFAULT 0
+        );
+        INSERT INTO characters (name) VALUES ('Legacy Hero');
+        INSERT INTO game_state (id, current_turn) VALUES (1, 42);
+    """)
+    conn.close()
+
+    manager = DatabaseManager(str(db_file))
+    conn = manager._get_connection()
+    character = conn.execute("SELECT * FROM characters WHERE id = 1").fetchone()
+    game_state = conn.execute("SELECT * FROM game_state WHERE id = 1").fetchone()
+    version = conn.execute(
+        "SELECT version FROM schema_version WHERE id = 1"
+    ).fetchone()["version"]
+    conn.close()
+
+    assert character["name"] == "Legacy Hero"
+    assert character["prose_fingerprint"] is None
+    assert game_state["current_turn"] == 42
+    assert game_state["game_day"] == 1
+    assert version == DatabaseManager.LATEST_SCHEMA_VERSION
+
+    # Reopening an up-to-date database must not reapply ALTER TABLE statements.
+    DatabaseManager(str(db_file))
 
 
 def test_character_creation_creates_related_rows(db):
@@ -136,16 +179,129 @@ def test_fact_filtering_by_type(db):
 
 
 def test_get_facts_by_day_range(db):
-    """Test 9: Verifies that day_range filtering works (game_day defaults to 1)."""
+    """Facts use the current campaign day unless an explicit day is supplied."""
     char_id = db.create_character("TimeTraveler")
-    
-    # Insert standard fact (will default to game_day = 1)
+
     db.insert_conversational_fact("f_day_1", char_id, "Day 1 happened.", [])
-    
-    # Should catch game_day 1
-    assert len(db.get_facts_by_day_range(char_id, 1, 1)) == 1
-    # Should exclude game_day 1
-    assert len(db.get_facts_by_day_range(char_id, 2, 5)) == 0
+    db.update_game_day(5)
+    db.insert_conversational_fact("f_day_5", char_id, "Day 5 happened.", [])
+    db.insert_conversational_fact(
+        "f_day_3",
+        char_id,
+        "A remembered event from day 3.",
+        [],
+        game_day=3,
+    )
+
+    assert [fact["id"] for fact in db.get_facts_by_day_range(char_id, 1, 1)] == ["f_day_1"]
+    assert [fact["id"] for fact in db.get_facts_by_day_range(char_id, 3, 3)] == ["f_day_3"]
+    assert [fact["id"] for fact in db.get_facts_by_day_range(char_id, 5, 5)] == ["f_day_5"]
+
+    active_facts = {fact["id"]: fact for fact in db.get_active_facts(char_id)}
+    assert active_facts["f_day_1"]["game_day"] == 1
+    assert active_facts["f_day_3"]["game_day"] == 3
+    assert active_facts["f_day_5"]["game_day"] == 5
+
+
+@pytest.mark.parametrize("invalid_day", [0, -1, 1.5, "2", True])
+def test_insert_fact_rejects_invalid_game_day(db, invalid_day):
+    char_id = db.create_character("Chronologist")
+
+    with pytest.raises(ValueError, match="game_day must be a positive integer"):
+        db.insert_conversational_fact(
+            "f_invalid_day",
+            char_id,
+            "This fact has an invalid date.",
+            [],
+            game_day=invalid_day,
+        )
+
+    assert db.get_active_facts(char_id) == []
+
+
+def test_get_facts_by_day_range_decodes_references_and_embeddings(db):
+    """Temporal retrieval returns the same decoded shape as normal fact retrieval."""
+    char_id = db.create_character("Archivist")
+    db.insert_conversational_fact(
+        "f_temporal",
+        char_id,
+        "The bridge collapsed.",
+        ["bridge", "collapse"],
+        embedding=[0.25, 0.75],
+    )
+
+    facts = db.get_facts_by_day_range(char_id, 1, 1)
+
+    assert facts[0]["references"] == ["bridge", "collapse"]
+    assert facts[0]["embedding"] == pytest.approx([0.25, 0.75])
+
+
+def test_cosine_similarity_handles_common_vector_relationships():
+    assert cosine_similarity([1.0, 0.0], [1.0, 0.0]) == pytest.approx(1.0)
+    assert cosine_similarity([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
+    assert cosine_similarity([1.0, 0.0], [-1.0, 0.0]) == pytest.approx(-1.0)
+
+
+def test_cosine_similarity_returns_zero_for_empty_or_zero_vectors():
+    assert cosine_similarity([], []) == 0.0
+    assert cosine_similarity([0.0, 0.0], [1.0, 2.0]) == 0.0
+
+
+def test_cosine_similarity_rejects_dimension_mismatch():
+    with pytest.raises(ValueError, match="Embedding dimensions must match"):
+        cosine_similarity([1.0], [1.0, 2.0])
+
+
+def test_similarity_retrieval_ranks_and_limits_day_range_results(db):
+    """Combined retrieval uses cosine similarity after temporal filtering."""
+    char_id = db.create_character("Historian")
+    db.insert_conversational_fact(
+        "f_similar",
+        char_id,
+        "A goblin attacked at the bridge.",
+        ["goblin", "bridge"],
+        embedding=[1.0, 0.0],
+    )
+    db.insert_conversational_fact(
+        "f_less_similar",
+        char_id,
+        "The innkeeper mentioned wolves.",
+        ["innkeeper", "wolves"],
+        embedding=[0.5, 0.5],
+    )
+
+    facts = db.get_facts_by_day_range_with_similarity(
+        char_id,
+        [1.0, 0.0],
+        start_day=1,
+        end_day=1,
+        limit=1,
+    )
+
+    assert [fact["id"] for fact in facts] == ["f_similar"]
+    assert facts[0]["similarity"] == pytest.approx(1.0)
+
+
+def test_game_day_can_be_updated_and_advanced(db):
+    """The campaign day persists and advances one day at a time."""
+    assert db.get_game_state()["game_day"] == 1
+
+    db.update_game_day(7)
+    assert db.get_game_state()["game_day"] == 7
+    assert db.advance_game_day() == 8
+    assert db.get_game_state()["game_day"] == 8
+
+
+def test_prose_fingerprint_can_be_replaced(db):
+    """Only the character's current prose fingerprint is retained."""
+    char_id = db.create_character("Bard")
+    assert db.get_prose_fingerprint(char_id) is None
+
+    db.update_prose_fingerprint(char_id, "Measured, lyrical, and melancholy.")
+    assert db.get_prose_fingerprint(char_id) == "Measured, lyrical, and melancholy."
+
+    db.update_prose_fingerprint(char_id, "Clipped sentences with rising urgency.")
+    assert db.get_prose_fingerprint(char_id) == "Clipped sentences with rising urgency."
 
 
 def test_turn_increment_expires_facts(db):

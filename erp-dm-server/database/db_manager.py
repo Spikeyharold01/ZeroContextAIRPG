@@ -4,12 +4,39 @@ import sqlite3
 import json
 import os
 import array
-from typing import Optional, Dict, List, Any, Union
+import math
+from typing import Optional, Dict, List, Any, Sequence, Union
 import logging
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
+    """Return cosine similarity for two equally sized embedding vectors.
+
+    Empty and zero-magnitude vectors have no direction, so they return 0.0.
+    A dimension mismatch indicates incompatible embedding models or corrupt data
+    and is rejected rather than silently truncating either vector.
+    """
+    if len(left) != len(right):
+        raise ValueError(
+            "Embedding dimensions must match "
+            f"(received {len(left)} and {len(right)})"
+        )
+    if not left:
+        return 0.0
+
+    dot_product = math.fsum(a * b for a, b in zip(left, right))
+    left_magnitude = math.sqrt(math.fsum(value * value for value in left))
+    right_magnitude = math.sqrt(math.fsum(value * value for value in right))
+
+    if left_magnitude == 0.0 or right_magnitude == 0.0:
+        return 0.0
+
+    similarity = dot_product / (left_magnitude * right_magnitude)
+    return max(-1.0, min(1.0, similarity))
 
 
 class EmbeddingUtils:
@@ -40,6 +67,12 @@ class EmbeddingUtils:
 
 class DatabaseManager:
     """Complete database manager for the Adaptive RPG/ERP Engine v5.2."""
+
+    LATEST_SCHEMA_VERSION = 3
+    _MIGRATIONS = {
+        2: ("game_state", "game_day", "002_add_game_day.sql"),
+        3: ("characters", "prose_fingerprint", "003_add_prose_fingerprint.sql"),
+    }
 
     # ---------- WHITELISTS for dynamic update methods ----------
     _WHITELISTS = {
@@ -96,15 +129,15 @@ class DatabaseManager:
         self._init_db()
 
     def _init_db(self):
-        """Create database directory and initialise schema."""
+        """Create a fresh schema or migrate an existing campaign database."""
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        
+
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='characters'")
         exists = cursor.fetchone()
         conn.close()
-        
+
         if not exists:
             schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
             if os.path.exists(schema_path):
@@ -116,7 +149,64 @@ class DatabaseManager:
                 conn.close()
                 logger.info("Database initialised with schema.sql")
             else:
-                logger.warning("schema.sql not found. Please initialise manually.")
+                raise FileNotFoundError(f"Database schema not found: {schema_path}")
+
+        self._migrate_schema()
+
+    def _migrate_schema(self):
+        """Apply ordered, idempotent migrations and record the schema version."""
+        conn = self._get_connection()
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS schema_version (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    version INTEGER NOT NULL
+                )
+            """)
+            row = conn.execute(
+                "SELECT version FROM schema_version WHERE id = 1"
+            ).fetchone()
+
+            if row is None:
+                # Databases created before migration tracking are the v1 baseline.
+                current_version = 1
+                conn.execute(
+                    "INSERT INTO schema_version (id, version) VALUES (1, ?)",
+                    (current_version,),
+                )
+            else:
+                current_version = row["version"]
+
+            if current_version > self.LATEST_SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"Database schema version {current_version} is newer than "
+                    f"supported version {self.LATEST_SCHEMA_VERSION}"
+                )
+
+            migrations_dir = os.path.join(os.path.dirname(__file__), "migrations")
+            for version in range(current_version + 1, self.LATEST_SCHEMA_VERSION + 1):
+                table, column, filename = self._MIGRATIONS[version]
+                if not self._column_exists(conn, table, column):
+                    migration_path = os.path.join(migrations_dir, filename)
+                    with open(migration_path, "r", encoding="utf-8") as migration_file:
+                        conn.execute(migration_file.read())
+                conn.execute(
+                    "UPDATE schema_version SET version = ? WHERE id = 1",
+                    (version,),
+                )
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+        """Return whether a column exists in a known migration table."""
+        rows = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+        return any(row["name"] == column for row in rows)
 
     def _get_connection(self) -> sqlite3.Connection:
         """Return a connection with row_factory set to sqlite3.Row."""
@@ -496,7 +586,7 @@ class DatabaseManager:
                 SELECT id, character_id, fact_text, fact_references AS "references",
                        embedding, importance, confidence, source_type,
                        fact_type, source_character_id,
-                       created_turn, last_referenced_turn, expires_at_turn, is_active
+                       created_turn, last_referenced_turn, expires_at_turn, game_day, is_active
                 FROM conversational_facts 
                 WHERE is_active = 1 AND character_id = ?
                 ORDER BY created_turn DESC
@@ -506,7 +596,7 @@ class DatabaseManager:
                 SELECT id, character_id, fact_text, fact_references AS "references",
                        embedding, importance, confidence, source_type,
                        fact_type, source_character_id,
-                       created_turn, last_referenced_turn, expires_at_turn, is_active
+                       created_turn, last_referenced_turn, expires_at_turn, game_day, is_active
                 FROM conversational_facts 
                 WHERE is_active = 1
                 ORDER BY created_turn DESC
@@ -531,7 +621,7 @@ class DatabaseManager:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, character_id, fact_text, fact_references AS references,
+            SELECT id, character_id, fact_text, fact_references AS "references",
                    embedding, importance, confidence, source_type,
                    fact_type, source_character_id,
                    created_turn, last_referenced_turn, expires_at_turn, game_day, is_active
@@ -563,7 +653,7 @@ class DatabaseManager:
         """
         # 1. Build SQL query with optional day filter
         query = """
-            SELECT id, character_id, fact_text, fact_references AS references,
+            SELECT id, character_id, fact_text, fact_references AS "references",
                    embedding, importance, confidence, source_type,
                    fact_type, source_character_id,
                    created_turn, last_referenced_turn, expires_at_turn, game_day, is_active
@@ -612,9 +702,15 @@ class DatabaseManager:
         source_character_id: int = None,        # NEW
         created_turn: int = 0,
         last_referenced_turn: int = 0,
-        expires_at_turn: int = None
+        expires_at_turn: int = None,
+        game_day: int = None,
     ):
-        """Insert a conversational fact with type and source."""
+        """Insert a conversational fact on an explicit or current game day."""
+        if game_day is None:
+            game_day = self.get_game_state().get("game_day", 1)
+        if isinstance(game_day, bool) or not isinstance(game_day, int) or game_day < 1:
+            raise ValueError("game_day must be a positive integer")
+
         conn = self._get_connection()
         cursor = conn.cursor()
         
@@ -631,12 +727,13 @@ class DatabaseManager:
         cursor.execute("""
             INSERT OR REPLACE INTO conversational_facts 
             (id, character_id, fact_text, fact_references, embedding, importance, confidence,
-             source_type, fact_type, source_character_id, created_turn, last_referenced_turn, expires_at_turn, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+             source_type, fact_type, source_character_id, created_turn, last_referenced_turn,
+             expires_at_turn, game_day, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
         """, (
             fact_id, character_id, fact_text, references_json, embedding_bytes,
             importance, confidence, source_type, fact_type, source_character_id,
-            created_turn, last_referenced_turn, expires_at_turn
+            created_turn, last_referenced_turn, expires_at_turn, game_day
         ))
         conn.commit()
         conn.close()

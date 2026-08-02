@@ -2,6 +2,11 @@
 -- ADAPTIVE RPG/ERP ENGINE v5.2 – COMPLETE SCHEMA
 -- ============================================================
 
+CREATE TABLE schema_version (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    version INTEGER NOT NULL
+);
+
 -- 1. CORE CHARACTERS
 CREATE TABLE characters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
