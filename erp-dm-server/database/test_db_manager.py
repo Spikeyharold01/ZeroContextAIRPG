@@ -2,12 +2,14 @@ import pytest
 import sqlite3
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
 # Add the database directory to Python's search path
 sys.path.insert(0, str(Path(__file__).parent))
 
+import db_manager as db_manager_module
 from db_manager import DatabaseManager, cosine_similarity
 
 # ==========================================
@@ -27,20 +29,100 @@ def db(tmp_path):
 # TESTS
 # ==========================================
 
-def test_schema_executes_cleanly(db):
-    """Test 1: Schema executes cleanly into a new database."""
-    names = db.get_all_character_names()
-    assert len(names) == 0  # No crash means schema executed successfully
+def test_schema_executes_cleanly(db, tmp_path):
+    """A fresh database contains the architecture's required schema."""
+    db_path = Path(db.db_path)
+    assert db_path.parent == tmp_path
+    assert db_path.is_file()
+
+    required_tables = {
+        "schema_version",
+        "characters",
+        "locations",
+        "emotional_state",
+        "dnd_stats",
+        "conversational_facts",
+        "event_log",
+        "working_memory",
+        "knowledge_chunks",
+        "world_state",
+        "scene_graph",
+        "game_state",
+    }
+    required_columns = {
+        "characters": {"prose_fingerprint", "status", "is_active"},
+        "conversational_facts": {"game_day"},
+        "game_state": {"game_day"},
+    }
 
     conn = db._get_connection()
+    actual_tables = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    missing_tables = required_tables - actual_tables
+
+    missing_columns = {
+        table: sorted(
+            columns
+            - {
+                row["name"]
+                for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+            }
+        )
+        for table, columns in required_columns.items()
+    }
+    missing_columns = {
+        table: columns for table, columns in missing_columns.items() if columns
+    }
+
     version = conn.execute(
         "SELECT version FROM schema_version WHERE id = 1"
     ).fetchone()["version"]
     conn.close()
+
+    assert not missing_tables, f"Missing required schema tables: {sorted(missing_tables)}"
+    assert not missing_columns, f"Missing critical schema columns: {missing_columns}"
     assert version == DatabaseManager.LATEST_SCHEMA_VERSION
 
 
-def test_legacy_database_is_migrated_without_losing_data(tmp_path):
+def _create_versioned_database(db_file, version):
+    conn = sqlite3.connect(db_file)
+    conn.executescript(f"""
+        CREATE TABLE schema_version (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            version INTEGER NOT NULL
+        );
+        INSERT INTO schema_version (id, version) VALUES (1, {version});
+        CREATE TABLE characters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL
+        );
+        CREATE TABLE game_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            current_turn INTEGER DEFAULT 0,
+            game_day INTEGER DEFAULT 1
+        );
+        INSERT INTO characters (name) VALUES ('Versioned Hero');
+        INSERT INTO game_state (id, current_turn, game_day) VALUES (1, 19, 6);
+    """)
+    conn.close()
+
+
+def _use_temporary_migrations(monkeypatch, tmp_path):
+    database_dir = tmp_path / "database_code"
+    migrations_dir = database_dir / "migrations"
+    migrations_dir.mkdir(parents=True)
+    source_dir = Path(db_manager_module.__file__).parent / "migrations"
+    for migration in source_dir.glob("*.sql"):
+        shutil.copy2(migration, migrations_dir / migration.name)
+    monkeypatch.setattr(db_manager_module, "__file__", str(database_dir / "db_manager.py"))
+    return migrations_dir
+
+
+def test_unversioned_legacy_database_is_migrated_without_losing_data(tmp_path):
     db_file = tmp_path / "legacy_game.db"
     conn = sqlite3.connect(db_file)
     conn.executescript("""
@@ -57,8 +139,9 @@ def test_legacy_database_is_migrated_without_losing_data(tmp_path):
     """)
     conn.close()
 
-    manager = DatabaseManager(str(db_file))
-    conn = manager._get_connection()
+    DatabaseManager(str(db_file))
+    conn = sqlite3.connect(db_file)
+    conn.row_factory = sqlite3.Row
     character = conn.execute("SELECT * FROM characters WHERE id = 1").fetchone()
     game_state = conn.execute("SELECT * FROM game_state WHERE id = 1").fetchone()
     version = conn.execute(
@@ -72,8 +155,236 @@ def test_legacy_database_is_migrated_without_losing_data(tmp_path):
     assert game_state["game_day"] == 1
     assert version == DatabaseManager.LATEST_SCHEMA_VERSION
 
-    # Reopening an up-to-date database must not reapply ALTER TABLE statements.
+
+def test_version_2_database_receives_only_remaining_migration(tmp_path):
+    db_file = tmp_path / "version_2.db"
+    _create_versioned_database(db_file, version=2)
+
     DatabaseManager(str(db_file))
+    conn = sqlite3.connect(db_file)
+    conn.row_factory = sqlite3.Row
+    character = conn.execute("SELECT * FROM characters WHERE id = 1").fetchone()
+    state = conn.execute("SELECT * FROM game_state WHERE id = 1").fetchone()
+    version = conn.execute(
+        "SELECT version FROM schema_version WHERE id = 1"
+    ).fetchone()["version"]
+    conn.close()
+
+    assert character["name"] == "Versioned Hero"
+    assert character["prose_fingerprint"] is None
+    assert state["current_turn"] == 19
+    assert state["game_day"] == 6
+    assert version == DatabaseManager.LATEST_SCHEMA_VERSION
+
+
+def test_current_database_can_be_opened_repeatedly_without_changes(tmp_path):
+    db_file = tmp_path / "current.db"
+    manager = DatabaseManager(str(db_file))
+    character_id = manager.create_character("Persistent Hero", full_card_text="Original card")
+    manager.update_game_day(8)
+
+    for _ in range(3):
+        DatabaseManager(str(db_file))
+
+    conn = sqlite3.connect(db_file)
+    conn.row_factory = sqlite3.Row
+    character = conn.execute(
+        "SELECT name, full_card_text FROM characters WHERE id = ?", (character_id,)
+    ).fetchone()
+    state = conn.execute(
+        "SELECT current_turn, game_day FROM game_state WHERE id = 1"
+    ).fetchone()
+    version = conn.execute(
+        "SELECT version FROM schema_version WHERE id = 1"
+    ).fetchone()["version"]
+    conn.close()
+
+    assert dict(character) == {
+        "name": "Persistent Hero",
+        "full_card_text": "Original card",
+    }
+    assert dict(state) == {"current_turn": 0, "game_day": 8}
+    assert version == DatabaseManager.LATEST_SCHEMA_VERSION
+
+
+def test_future_schema_version_is_rejected_without_modifying_data(tmp_path):
+    db_file = tmp_path / "future.db"
+    future_version = DatabaseManager.LATEST_SCHEMA_VERSION + 1
+    _create_versioned_database(db_file, version=future_version)
+
+    with pytest.raises(RuntimeError, match="is newer than supported"):
+        DatabaseManager(str(db_file))
+
+    conn = sqlite3.connect(db_file)
+    name = conn.execute("SELECT name FROM characters WHERE id = 1").fetchone()[0]
+    state = conn.execute(
+        "SELECT current_turn, game_day FROM game_state WHERE id = 1"
+    ).fetchone()
+    version = conn.execute(
+        "SELECT version FROM schema_version WHERE id = 1"
+    ).fetchone()[0]
+    conn.close()
+
+    assert name == "Versioned Hero"
+    assert state == (19, 6)
+    assert version == future_version
+
+
+def test_missing_migration_file_leaves_version_and_data_unchanged(
+    tmp_path, monkeypatch
+):
+    migrations_dir = _use_temporary_migrations(monkeypatch, tmp_path)
+    (migrations_dir / "003_add_prose_fingerprint.sql").unlink()
+    db_file = tmp_path / "missing_migration.db"
+    _create_versioned_database(db_file, version=2)
+
+    with pytest.raises(FileNotFoundError, match="003_add_prose_fingerprint.sql"):
+        DatabaseManager(str(db_file))
+
+    conn = sqlite3.connect(db_file)
+    columns = {
+        row[1] for row in conn.execute('PRAGMA table_info("characters")').fetchall()
+    }
+    name = conn.execute("SELECT name FROM characters WHERE id = 1").fetchone()[0]
+    state = conn.execute(
+        "SELECT current_turn, game_day FROM game_state WHERE id = 1"
+    ).fetchone()
+    version = conn.execute(
+        "SELECT version FROM schema_version WHERE id = 1"
+    ).fetchone()[0]
+    conn.close()
+
+    assert "prose_fingerprint" not in columns
+    assert name == "Versioned Hero"
+    assert state == (19, 6)
+    assert version == 2
+
+
+def test_failed_migration_rolls_back_schema_version_and_prior_migrations(
+    tmp_path, monkeypatch
+):
+    migrations_dir = _use_temporary_migrations(monkeypatch, tmp_path)
+    (migrations_dir / "003_add_prose_fingerprint.sql").write_text(
+        "ALTER TABLE characters ADD COLUMN prose_fingerprint TEXT NOT NULL;",
+        encoding="utf-8",
+    )
+    db_file = tmp_path / "failed_migration.db"
+    conn = sqlite3.connect(db_file)
+    conn.executescript("""
+        CREATE TABLE characters (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+        CREATE TABLE game_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            current_turn INTEGER DEFAULT 0
+        );
+        INSERT INTO characters (id, name) VALUES (1, 'Rollback Hero');
+        INSERT INTO game_state (id, current_turn) VALUES (1, 27);
+    """)
+    conn.close()
+
+    with pytest.raises(sqlite3.OperationalError, match="NOT NULL"):
+        DatabaseManager(str(db_file))
+
+    conn = sqlite3.connect(db_file)
+    character_columns = {
+        row[1] for row in conn.execute('PRAGMA table_info("characters")').fetchall()
+    }
+    game_state_columns = {
+        row[1] for row in conn.execute('PRAGMA table_info("game_state")').fetchall()
+    }
+    name = conn.execute("SELECT name FROM characters WHERE id = 1").fetchone()[0]
+    current_turn = conn.execute(
+        "SELECT current_turn FROM game_state WHERE id = 1"
+    ).fetchone()[0]
+    version_row = conn.execute(
+        "SELECT version FROM schema_version WHERE id = 1"
+    ).fetchone()
+    conn.close()
+
+    assert "prose_fingerprint" not in character_columns
+    assert "game_day" not in game_state_columns
+    assert name == "Rollback Hero"
+    assert current_turn == 27
+    assert version_row is None
+
+
+def test_realistic_legacy_campaign_fixture_preserves_representative_data(tmp_path):
+    fixture_source = Path(__file__).parent / "test_fixtures" / "legacy_campaign.sql"
+    fixture_copy = tmp_path / "legacy_campaign.sql"
+    shutil.copy2(fixture_source, fixture_copy)
+    db_file = tmp_path / "legacy_campaign.db"
+    conn = sqlite3.connect(db_file)
+    conn.executescript(fixture_copy.read_text(encoding="utf-8"))
+    before = {
+        "location": conn.execute(
+            "SELECT name, region, description FROM locations WHERE id = 7"
+        ).fetchone(),
+        "character": conn.execute(
+            "SELECT name, type, current_goal, tension, plot_state, current_location_id "
+            "FROM characters WHERE id = 12"
+        ).fetchone(),
+        "emotion": conn.execute(
+            "SELECT trust, fear, mood FROM emotional_state WHERE character_id = 12"
+        ).fetchone(),
+        "fact": conn.execute(
+            "SELECT fact_text, fact_references, importance, confidence, is_active "
+            "FROM conversational_facts WHERE id = 'fact_bridge'"
+        ).fetchone(),
+        "game_state": conn.execute(
+            "SELECT current_location_id, current_scene_type, combat_active, current_turn "
+            "FROM game_state WHERE id = 1"
+        ).fetchone(),
+    }
+    conn.close()
+
+    DatabaseManager(str(db_file))
+
+    conn = sqlite3.connect(db_file)
+    after = {
+        "location": conn.execute(
+            "SELECT name, region, description FROM locations WHERE id = 7"
+        ).fetchone(),
+        "character": conn.execute(
+            "SELECT name, type, current_goal, tension, plot_state, current_location_id "
+            "FROM characters WHERE id = 12"
+        ).fetchone(),
+        "emotion": conn.execute(
+            "SELECT trust, fear, mood FROM emotional_state WHERE character_id = 12"
+        ).fetchone(),
+        "fact": conn.execute(
+            "SELECT fact_text, fact_references, importance, confidence, is_active "
+            "FROM conversational_facts WHERE id = 'fact_bridge'"
+        ).fetchone(),
+        "game_state": conn.execute(
+            "SELECT current_location_id, current_scene_type, combat_active, current_turn "
+            "FROM game_state WHERE id = 1"
+        ).fetchone(),
+    }
+    migrated_values = conn.execute(
+        "SELECT prose_fingerprint FROM characters WHERE id = 12"
+    ).fetchone()[0], conn.execute(
+        "SELECT game_day FROM game_state WHERE id = 1"
+    ).fetchone()[0]
+    version = conn.execute(
+        "SELECT version FROM schema_version WHERE id = 1"
+    ).fetchone()[0]
+    conn.close()
+
+    assert before == {
+        "location": ("The Lantern Inn", "North Road", "A crowded coaching inn."),
+        "character": (
+            "Mara Voss", "NPC", "Protect the sealed letter", 0.75,
+            '{"letter_hidden": true}', 7,
+        ),
+        "emotion": (63, 27, "guarded"),
+        "fact": (
+            "The eastern bridge is watched.",
+            '["eastern bridge", "watchers"]', 0.8, 0.95, 1,
+        ),
+        "game_state": (7, "investigation", 0, 42),
+    }
+    assert after == before
+    assert migrated_values == (None, 1)
+    assert version == DatabaseManager.LATEST_SCHEMA_VERSION
 
 
 def test_character_creation_creates_related_rows(db):
