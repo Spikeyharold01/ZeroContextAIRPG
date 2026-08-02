@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+erp-dm-server/engine.toml
+erp-dm-server/data/
+erp-dm-server/exports/
+erp-dm-server/imports/
