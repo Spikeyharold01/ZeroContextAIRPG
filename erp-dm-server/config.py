@@ -493,10 +493,6 @@ def engine_load(cls):
     _apply_environment_overrides(config)
     _validate(config)
 
-    if not CONFIG_FILE.exists():
-        logger.info("Creating default engine.toml")
-        _save_to_file(config)
-
     _log_summary(config)
     return config
 
@@ -512,6 +508,13 @@ EngineConfig.save = engine_save
 
 def auto_configure() -> EngineConfig:
     return EngineConfig.load()
+
+
+def initialize_configuration() -> EngineConfig:
+    """Load the effective configuration and explicitly persist it."""
+    config = EngineConfig.load()
+    config.save()
+    return config
 
 
 # ==========================================================
@@ -530,3 +533,6 @@ MARKER_SYSTEM_PROMPT = settings.markers.system_prompt
 MARKER_SCENARIO = settings.markers.scenario
 MARKER_EXAMPLES = settings.markers.examples
 MARKER_USER = settings.markers.user_character
+
+if __name__ == "__main__":
+    initialize_configuration()
