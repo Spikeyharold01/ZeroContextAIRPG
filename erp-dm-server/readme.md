@@ -449,3 +449,131 @@ Users will need to add specific tags to their character cards, system prompts et
 =SCENARIO= - The current scenario
 =EXAMPLES= - Examples of chat
 =USER= - users Stats
+
+UPDATE 2
+USERs wanting to use D&D stats will need to use the following format character sheet
+[D&D STATS]
+CLASS: Fighter
+SUBCLASS: Battle Master
+LEVEL: 6
+RACE: Half-Elf
+ALIGNMENT: Neutral Good
+BACKGROUND: Outlander
+EXPERIENCE_POINTS: 0
+
+[ABILITIES]
+STR: 16
+DEX: 16
+CON: 14
+INT: 12
+WIS: 14
+CHA: 15
+
+[COMBAT]
+HP: 52
+HP_MAX: 52
+ARMOR_CLASS: 16
+SPEED: 30
+INITIATIVE: 3
+PROFICIENCY_BONUS: 3
+HIT_DICE: 6d10
+
+[SAVING_THROWS]
+STR: 6
+DEX: 3
+CON: 5
+INT: 1
+WIS: 2
+CHA: 2
+
+[SKILLS]
+Acrobatics: 6
+Animal Handling: 5
+Arcana: 1
+Athletics: 6
+Deception: 2
+History: 1
+Insight: 5
+Intimidation: 2
+Investigation: 1
+Medicine: 2
+Nature: 1
+Perception: 5
+Performance: 2
+Persuasion: 5
+Religion: 1
+Sleight of Hand: 3
+Stealth: 6
+Survival: 5
+
+[PROFICIENCIES]
+ARMOR: Light, Medium, Heavy, Shields
+WEAPONS: Simple, Martial
+TOOLS: Thieves' Tools
+LANGUAGES: Common, Elvish, Goblin, Dwarvish
+
+[SENSES]
+PASSIVE_PERCEPTION: 15
+DARKVISION: 60
+
+[FEATURES]
+RACIAL_TRAITS: Fey Ancestry, Darkvision
+CLASS_FEATURES: Fighting Style (Archery), Action Surge, Second Wind, Extra Attack
+FEATS: None
+
+[MANEUVERS]
+Commander's Strike: Forgo one attack to direct an ally to strike.
+Rally: Grant an ally temporary HP (1d8 + CHA mod).
+Trip Attack: Add 1d8 damage and force a STR save or target falls prone.
+
+[EQUIPMENT]
+Longsword +1: weapon|melee|7|1d8+4|slashing
+Longbow: weapon|ranged|8|1d8+3|piercing
+Dagger: weapon|finesse|6|1d4+3|piercing
+Studded Leather Armor: armor|16
+Quiver of 20 Arrows: ammunition
+Explorer's Pack: gear
+Elven Ring: gear
+Hunting Trap: gear
+Traveler's Clothes: gear
+
+[SPELLCASTING]
+ABILITY: None
+SAVE_DC: 10
+ATTACK_BONUS: 4
+CANTRIPS_KNOWN: 0
+SPELLS_KNOWN: 0
+
+[SPELL_SLOTS]
+LEVEL_1: 0
+LEVEL_2: 0
+LEVEL_3: 0
+LEVEL_4: 0
+LEVEL_5: 0
+LEVEL_6: 0
+LEVEL_7: 0
+LEVEL_8: 0
+LEVEL_9: 0
+
+[KNOWN_SPELLS]
+None
+
+[PREPARED_SPELLS]
+None
+
+This can be parsed clenaly
+
+ADDITIONAL -
+
+Add a Nicegui interface to enable users to upload a character card before playing and add the special SillyTavern config file.
+Will require adding a tab to NiceGUI that is disabled until a connection is made t=wth the soryteller AI.
+Tab should allow users to drop a card file (png/text) onto the form and convert it to the required standard. 
+D&D stats & Character card will be editable before exporting. Request users to add character card to ST.
+Also has a checkbox option to add D&D stats if missing.
+The character card can be auto installed into ST or saved to be installed manually.
+Must install pillow to read and write png with text
+The ST config lives in .\SillyTavern\data\default-user\context and will be named ZerocontextAI.json. But we must also allow users to manually download the config and add it manually to their ST (for mobile / cloud users)
+
+
+License
+Adaptive RPG Engine is licensed under the GNU Affero General Public License v3.0 (AGPLv3). See the LICENSE file for details.

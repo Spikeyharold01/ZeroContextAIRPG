@@ -1,3 +1,5 @@
+# The Adaptive RPG/ERP Engine
+# It turns casual AI chatbots into permanent, living RPG worlds that never forget, never break character, and run with unprecedented speed and efficiency.
 # Copyright (C) 2026 Spikeyharold01 Stephen Dutton
 #
 # This program is free software: you can redistribute it and/or modify
@@ -9,6 +11,12 @@
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+#Contact Details - Stevedutton42@gmail.com
+#Source https://github.com/Spikeyharold01/ZeroContextAIRPG
 #
 
 # database/db_manager.py
