@@ -1,0 +1,20 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: erp-dm-server/requirements-dev.txt
+      - name: Install development requirements
+        run: python -m pip install -r erp-dm-server/requirements-dev.txt
+      - name: Run acceptance checks
+        run: ./scripts/check.sh
