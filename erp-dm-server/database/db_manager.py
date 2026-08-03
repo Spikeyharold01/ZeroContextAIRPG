@@ -25,13 +25,16 @@ import sqlite3
 import json
 import os
 import array
+import importlib.util
 import math
+import sys
 from typing import Optional, Dict, List, Any, Sequence, Union
 import logging
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+DATABASE_CODE_DIR = os.path.dirname(__file__)
 
 
 def cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
@@ -87,14 +90,16 @@ class EmbeddingUtils:
 
 
 class DatabaseManager:
-    """Complete database manager for the Adaptive RPG/ERP Engine v5.2."""
+    """SQLite persistence manager with independently versioned schema migrations."""
 
-    LATEST_SCHEMA_VERSION = 5
+    LATEST_SCHEMA_VERSION = 6
+    _MIGRATION_FAILURE_INJECTOR = None
     _MIGRATIONS = {
         2: ("game_state", "game_day", "002_add_game_day.sql"),
         3: ("characters", "prose_fingerprint", "003_add_prose_fingerprint.sql"),
         4: ("characters", "status", "004_add_character_status.sql"),
         5: ("characters", "is_active", "005_add_character_is_active.sql"),
+        6: (None, None, "006_reconcile_schema.py"),
     }
 
     # ---------- WHITELISTS for dynamic update methods ----------
@@ -179,26 +184,19 @@ class DatabaseManager:
     def _migrate_schema(self):
         """Apply ordered, idempotent migrations and record the schema version."""
         conn = self._get_connection()
+        foreign_keys_temporarily_disabled = False
         try:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS schema_version (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    version INTEGER NOT NULL
-                )
-            """)
-            row = conn.execute(
-                "SELECT version FROM schema_version WHERE id = 1"
+            has_version_table = conn.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'schema_version'"
             ).fetchone()
-
-            if row is None:
-                # Databases created before migration tracking are the v1 baseline.
-                current_version = 1
-                conn.execute(
-                    "INSERT INTO schema_version (id, version) VALUES (1, ?)",
-                    (current_version,),
-                )
-            else:
-                current_version = row["version"]
+            row = None
+            if has_version_table:
+                row = conn.execute(
+                    "SELECT version FROM schema_version WHERE id = 1"
+                ).fetchone()
+            original_version = row["version"] if row is not None else None
+            current_version = original_version if original_version is not None else 1
 
             if current_version > self.LATEST_SCHEMA_VERSION:
                 raise RuntimeError(
@@ -208,8 +206,49 @@ class DatabaseManager:
 
             migrations_dir = os.path.join(os.path.dirname(__file__), "migrations")
             for version in range(current_version + 1, self.LATEST_SCHEMA_VERSION + 1):
+                filename = self._MIGRATIONS[version][2]
+                migration_path = os.path.join(migrations_dir, filename)
+                if not os.path.isfile(migration_path):
+                    raise FileNotFoundError(migration_path)
+
+            controlled_migration = None
+            if current_version < 6:
+                controlled_migration = self._load_controlled_migration(6)
+                expected = controlled_migration.load_current_manifest()
+                controlled_migration.validate_source_database(conn, expected)
+                if (
+                    controlled_migration.tables_requiring_rebuild(conn)
+                    or controlled_migration.database_has_user_data(conn)
+                ):
+                    controlled_migration.create_verified_backup(self.db_path)
+
+                # SQLite cannot rebuild referenced tables while enforcement is
+                # active. The controlled migration validates references before
+                # rebuilding and runs foreign_key_check before version 6 is set.
+                conn.execute("PRAGMA foreign_keys = OFF")
+                foreign_keys_temporarily_disabled = True
+
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS schema_version (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    version INTEGER NOT NULL
+                )
+            """)
+            if original_version is None:
+                # Databases created before migration tracking are the v1 baseline.
+                conn.execute(
+                    "INSERT INTO schema_version (id, version) VALUES (1, ?)",
+                    (current_version,),
+                )
+
+            for version in range(current_version + 1, self.LATEST_SCHEMA_VERSION + 1):
                 table, column, filename = self._MIGRATIONS[version]
-                if not self._column_exists(conn, table, column):
+                if version == 6:
+                    if controlled_migration is None:
+                        controlled_migration = self._load_controlled_migration(version)
+                    controlled_migration.reconcile(conn)
+                elif self._table_exists(conn, table) and not self._column_exists(conn, table, column):
                     migration_path = os.path.join(migrations_dir, filename)
                     with open(migration_path, "r", encoding="utf-8") as migration_file:
                         conn.execute(migration_file.read())
@@ -223,7 +262,46 @@ class DatabaseManager:
             conn.rollback()
             raise
         finally:
+            if foreign_keys_temporarily_disabled:
+                conn.execute("PRAGMA foreign_keys = ON")
             conn.close()
+
+    def _load_controlled_migration(self, version: int):
+        """Load a controlled Python migration by registered version."""
+        manifest_module_name = "database_schema_manifest_v6"
+        if manifest_module_name not in sys.modules:
+            manifest_path = os.path.join(DATABASE_CODE_DIR, "schema_manifest.py")
+            manifest_spec = importlib.util.spec_from_file_location(
+                manifest_module_name, manifest_path
+            )
+            if manifest_spec is None or manifest_spec.loader is None:
+                raise RuntimeError(f"Unable to load schema manifest {manifest_path}")
+            manifest_module = importlib.util.module_from_spec(manifest_spec)
+            sys.modules[manifest_module_name] = manifest_module
+            manifest_spec.loader.exec_module(manifest_module)
+
+        filename = self._MIGRATIONS[version][2]
+        migration_path = os.path.join(
+            os.path.dirname(__file__), "migrations", filename
+        )
+        spec = importlib.util.spec_from_file_location(
+            f"database_migration_{version}", migration_path
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Unable to load migration {migration_path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        failure_injector = type(self)._MIGRATION_FAILURE_INJECTOR
+        if failure_injector is not None:
+            module._after_table_rebuild = failure_injector
+        return module
+
+    @staticmethod
+    def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+        return conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone() is not None
 
     @staticmethod
     def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
@@ -232,9 +310,10 @@ class DatabaseManager:
         return any(row["name"] == column for row in rows)
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Return a connection with row_factory set to sqlite3.Row."""
+        """Return a row-based connection with foreign-key enforcement enabled."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     def _validate_updates(self, table: str, updates: dict) -> dict:

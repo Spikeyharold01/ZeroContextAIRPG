@@ -1,11 +1,6 @@
 -- ============================================================
--- ADAPTIVE RPG/ERP ENGINE – DATABASE SCHEMA VERSION 6
+-- ADAPTIVE RPG/ERP ENGINE v5.2 – COMPLETE SCHEMA
 -- ============================================================
-
-CREATE TABLE schema_version (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    version INTEGER NOT NULL
-);
 
 -- 1. CORE CHARACTERS
 CREATE TABLE characters (
@@ -30,9 +25,7 @@ CREATE TABLE characters (
     immediate_beat TEXT,
     long_arc TEXT,
     tension FLOAT DEFAULT 0.5,
-    prose_fingerprint TEXT,
-    status TEXT DEFAULT 'active',
-    is_active BOOLEAN DEFAULT 1,
+    prose_fingerprint TEXT, 
     
     -- Generic plot state (miscellaneous JSON)
     plot_state TEXT,

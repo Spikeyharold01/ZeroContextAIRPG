@@ -1,17 +1,42 @@
-The Adaptive RPG/ERP Engine v6.0 – OpenAI-Compatible Proxy Architecture
+The Adaptive RPG/ERP Engine – Product Architecture v6.0
 1. Overview
-The System is a production‑ready, OpenAI‑compatible proxy server that intercepts SillyTavern prompts, rebuilds them as surgical 4,000‑token prompts, and forwards them to a Main Storyteller LLM. The proxy mimics the OpenAI API format so that SillyTavern connects to it as if it were an OpenAI endpoint – no complex configuration required.
+This document describes the target OpenAI-compatible proxy architecture and records the contracts that the implementation is working toward. The repository currently provides the configuration system and UI, OpenAI-message ingestion, D&D character-sheet parsing, SQLite persistence and migrations, and automated tests. It does not yet provide the FastAPI proxy endpoint, prompt rebuilder, storyteller or rules-model clients, fact manager, runtime save/load service, or complete end-to-end orchestration.
 
-Key Innovations (v6.0)
+1.1 Version concepts
+
+The project uses three independent version numbers:
+
+- Product or architecture version: v6.0. This versions the overall engine design described by this document. It is not a database or API compatibility number.
+- Database schema version: 6. This is stored in SQLite's schema_version table and is managed by DatabaseManager migrations.
+- API version: v1. This is the planned HTTP namespace in routes such as /v1/chat/completions. It does not imply that the endpoint is implemented yet.
+
+1.2 Implementation status
+
+Implemented foundations:
+
+- typed configuration and the NiceGUI configuration editor;
+- OpenAI-format message ingestion and marker extraction;
+- D&D character-sheet parsing;
+- SQLite schema version 6, reconciliation migrations, state access, and tests.
+
+Planned runtime components:
+
+- FastAPI/OpenAI-compatible endpoints and streaming;
+- prompt rebuilding and token-budget enforcement;
+- storyteller, rules-engine, embedding, and RAG clients;
+- fact synchronization, structured-output extraction, orchestration, and campaign archive services;
+- the character-card conversion and SillyTavern installation UI.
+
+Target Design Capabilities (Product v6.0)
 Feature	Description
-OpenAI‑Compatible API	The proxy listens on /v1/chat/completions and accepts the same JSON format as OpenAI. SillyTavern connects with zero configuration changes.
-Belief System	Facts are stored as world_fact, belief_fact, or rumor_fact with source_character_id tracking who expressed a belief.
-Modular Rules Engine	The 1.5B DnD‑Unified is optional and swappable. Users can turn it off, or replace it with other game‑specific models (Pathfinder, Call of Cthulhu, Battletech, etc.).
-Save & Load	Full campaign persistence: export all DB tables + configuration to a single file; import to continue a campaign.
-Proxy‑Managed Facts	The 8B outputs current facts; the proxy compares to the database and decides what to add or update. Facts not mentioned persist unchanged.
-In‑Game Turn Counter	Facts expire based on expires_at_turn, not real‑world time.
-Confidence Scores	Emotional shifts below 0.55 are ignored to prevent hallucination.
-2. Updated Architecture Diagram
+OpenAI‑Compatible API	The planned proxy will listen on /v1/chat/completions and accept the same JSON format as OpenAI.
+Belief System	The database stores world_fact, belief_fact, and rumor_fact records with source_character_id provenance; runtime synchronization remains planned.
+Modular Rules Engine	The target runtime makes the rules model optional and replaceable with game-specific adapters.
+Save & Load	The planned archive service will export database state and portable configuration for later import.
+Proxy‑Managed Facts	The planned storyteller output and fact manager will propose and reconcile facts; absence will not imply deletion.
+In‑Game Turn Counter	The implemented persistence layer expires facts using expires_at_turn rather than real-world time.
+Confidence Scores	The target state-update pipeline will filter low-confidence emotional shifts.
+2. Target Architecture Diagram (planned runtime)
 text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                         SILLYTAVERN (UI)                                   │
@@ -100,8 +125,8 @@ text
 │  │  • Loads DB state + config from file (Import)                     │   │
 │  └────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
-3. OpenAI‑Compatible API
-3.1 Endpoint: POST /v1/chat/completions
+3. Planned OpenAI‑Compatible API Contract
+3.1 Planned endpoint: POST /v1/chat/completions
 Input (OpenAI Format):
 
 json
@@ -142,16 +167,25 @@ json
     "total_tokens": 1750
   }
 }
-3.2 Character ID Extraction
-SillyTavern sends a characterId in the request headers when using the OpenAI endpoint. The proxy extracts it.
+3.2 Planned character ID extraction
+The target integration allows SillyTavern to send a character ID in the request headers. The future proxy will extract it.
 
 Headers:
 
 text
 X-Character-ID: 1
-Fallback: Extract character name from the system prompt or the first message.
+Fallback design: extract the character name from the system prompt or first message.
 
-4. Modular Rules Engine
+3.3 Chat-history ownership and authority
+
+- SillyTavern may send raw chat history with each request.
+- The proxy treats that history as untrusted input material, not persistent authority.
+- The prompt builder selects only the configured number of recent exchanges; receiving more history does not mean all of it enters the model prompt.
+- SQLite is the authoritative source for persistent facts, beliefs, character state, world state, scene state, goals, mechanics, and event history.
+- Older chat text must not override authoritative database state. Conflicts are resolved in favor of validated SQLite state.
+
+4. Planned Modular Rules Engine
+The configuration schema exists, but the router and model adapters shown below are illustrative design examples and are not present in the repository yet.
 4.1 Configuration
 python
 # config.py
@@ -199,7 +233,7 @@ class RulesRouter:
             return {"requires_roll": False, "narrative": "Pure narrative mode."}
         # ... existing adjudication logic ...
 4.3 Intent Classification (Still Used)
-The intent classifier still runs regardless of Rules Engine state. It determines if an action is combat, skill_check, or narrative. If the Rules Engine is disabled, all actions are treated as narrative.
+In the target runtime, the intent classifier runs regardless of rules-engine state. It determines whether an action is combat, skill_check, or narrative. If the rules engine is disabled, the router treats actions as narrative.
 
 python
 # proxy_server/router.py
@@ -215,7 +249,8 @@ def process_message(self, context):
     else:
         # Skip rules, proceed to prompt building
         mechanical_result = {"success": True, "narrative": "Narrative mode."}
-5. Save & Load System
+5. Planned Save & Load System
+The following snippets define the intended archive contract. `SaveLoadManager` and its HTTP endpoints are not implemented yet.
 5.1 Export: Save Campaign
 python
 # proxy_server/save_load.py
@@ -299,7 +334,7 @@ async def import_campaign(file: UploadFile):
         f.write(await file.read())
     success = save_load_manager.import_campaign(temp_path)
     return {"success": success}
-6. Updated Token Budget (v6.0)
+6. Target Token Budget (Product Architecture v6.0)
 Component	Tokens
 System Prompt	~200
 Character Core	~150
@@ -314,7 +349,7 @@ Combat State	~100
 User Message	~50
 Instruction	~50
 TOTAL	~2,680–2,950 tokens
-7. File Structure (v6.0)
+7. Target File Structure (planned; Product Architecture v6.0)
 text
 erp-dm-server/
 ├── config.py
@@ -349,7 +384,7 @@ erp-dm-server/
 ├── data/                           # SQLite + ChromaDB
 ├── exports/                        # Campaign exports
 └── imports/                        # Campaign imports
-8. Updated Schema (v6.0)
+8. Database Schema Version 6
 8.1 conversational_facts Table (With Belief Support)
 sql
 CREATE TABLE conversational_facts (
@@ -369,18 +404,19 @@ CREATE TABLE conversational_facts (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_active BOOLEAN DEFAULT 1,
+    game_day INTEGER DEFAULT 1,
     FOREIGN KEY (character_id) REFERENCES characters(id),
     FOREIGN KEY (source_character_id) REFERENCES characters(id)
 );
-9. Summary of Changes from v5.2
+9. Product Architecture Changes from v5.2
 Change	Description
-OpenAI‑Compatible API	Proxy now mimics OpenAI format – SillyTavern connects with zero config changes.
+OpenAI‑Compatible API	The target proxy contract uses OpenAI-compatible request and response formats.
 Belief System	fact_type (world_fact, belief_fact, rumor_fact) and source_character_id added.
-Modular Rules Engine	Rules engine is optional and swappable (DnD, Pathfinder, CoC, Battletech, OFF).
-Save & Load	Full campaign persistence via export/import of DB + config.
-Rules Router	New component routes to the appropriate rules engine or bypasses it.
-Header‑Based Character ID	SillyTavern sends X-Character-ID header; proxy uses it.
-10. Final Configuration Example
+Modular Rules Engine	The planned rules engine is optional and swappable (DnD, Pathfinder, CoC, Battletech, OFF).
+Save & Load	A campaign archive service is planned; it is not implemented yet.
+Rules Router	A planned component will route to the selected rules engine or bypass it.
+Header‑Based Character ID	The planned API accepts X-Character-ID as its primary character selector.
+10. Target Configuration Example (illustrative, not the current configuration API)
 python
 # config.py
 
@@ -417,41 +453,39 @@ class Config:
     SERVER_HOST = "0.0.0.0"
     SERVER_PORT = 5000
 11. Implementation Checklist
-Phase	Files	Priority
-1	config.py (Updated)	High
-2	database/schema.sql (Add belief columns)	High
-3	database/db_manager.py (Belief support)	High
-4	proxy_server/ingester.py (OpenAI payload + headers)	High
-5	proxy_server/main.py (OpenAI endpoints)	High
-6	proxy_server/router.py (Rules engine integration)	High
-7	proxy_server/rules_router.py (NEW)	High
-8	proxy_server/save_load.py (NEW)	Medium
-9	proxy_server/fact_manager.py (Belief support)	Medium
-10	proxy_server/rebuilder.py (Belief labels)	Medium
-11	proxy_server/extractors.py (Belief JSON)	Medium
-12	Integration and testing	Ongoing
+Component	Status
+config.py and config_ui.py	Implemented foundation
+database/schema.sql, migrations, and db_manager.py	Implemented foundation
+ingester.py and dnd_ingester.py	Implemented foundation
+FastAPI /v1 endpoints	Planned, not implemented
+Prompt rebuilder and token budgeting	Planned, not implemented
+Rules and storyteller model clients	Planned, not implemented
+Fact manager, extractors, and orchestration router	Planned, not implemented
+Campaign archive import/export service	Planned, not implemented
+Character-card conversion and SillyTavern setup UI	Planned, not implemented
+End-to-end integration testing	Blocked on runtime implementation
 12. Final Notes
-OpenAI Compatibility – Users connect SillyTavern to http://proxy:5000/v1 as an OpenAI endpoint. No configuration changes.
+OpenAI Compatibility – The target runtime will expose http://proxy:5000/v1 as an OpenAI-compatible endpoint; this endpoint is not implemented in the current repository.
 
 Belief System – Facts are labelled so the system knows whether something is objective truth or a character's opinion.
 
-Modular Rules Engine – Users can disable rules entirely for pure narrative ERP, or swap to other game systems.
+Modular Rules Engine – The design allows rules to be disabled or replaced, but the runtime router and model adapters remain planned.
 
-Save & Load – Campaigns can be exported and imported, preserving all state and configuration.
+Save & Load – Export/import behavior is an architectural requirement; the runtime archive service remains planned.
 
-The system is ready to implement.
+The persistence and ingestion foundations are implemented; the proxy runtime remains to be built.
 
 UPDATE 1
 
 Users will need to add specific tags to their character cards, system prompts etc
-=CHARCTER CARD= A Character card and Stats
+=CHARACTER CARD= A Character card and Stats
 =SYSTEM PROMPT= System prompt
 =SCENARIO= - The current scenario
 =EXAMPLES= - Examples of chat
 =USER= - users Stats
 
 UPDATE 2
-USERs wanting to use D&D stats will need to use the following format character sheet
+Users wanting to use D&D stats must use the following character-sheet format. The parser acceptance test reads this exact complete example, including the blank lines between sections:
 [D&D STATS]
 CLASS: Fighter
 SUBCLASS: Battle Master
@@ -561,11 +595,11 @@ None
 [PREPARED_SPELLS]
 None
 
-This can be parsed clenaly
+The acceptance test verifies that this exact example is parsed completely.
 
-ADDITIONAL -
+PLANNED ADDITION -
 
-Add a Nicegui interface to enable users to upload a character card before playing and add the special SillyTavern config file.
+Add a NiceGUI interface to enable users to upload a character card before playing and add the special SillyTavern config file.
 Will require adding a tab to NiceGUI that is disabled until a connection is made t=wth the soryteller AI.
 Tab should allow users to drop a card file (png/text) onto the form and convert it to the required standard. 
 D&D stats & Character card will be editable before exporting. Request users to add character card to ST.
