@@ -1,0 +1,1 @@
+ALTER TABLE characters ADD COLUMN is_active BOOLEAN DEFAULT 1;

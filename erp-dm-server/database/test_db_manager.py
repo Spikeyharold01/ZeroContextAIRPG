@@ -122,6 +122,37 @@ def _use_temporary_migrations(monkeypatch, tmp_path):
     return migrations_dir
 
 
+
+def test_migration_inventory_is_complete_and_consistent():
+    registered = list(DatabaseManager._MIGRATIONS.items())
+    registered_versions = [version for version, _ in registered]
+    expected_versions = set(range(2, DatabaseManager.LATEST_SCHEMA_VERSION + 1))
+    migrations_dir = Path(db_manager_module.__file__).parent / "migrations"
+
+    assert len(registered_versions) == len(set(registered_versions)), (
+        f"Duplicate migration versions registered: {registered_versions}"
+    )
+    assert set(registered_versions) == expected_versions, (
+        "Migration inventory must register every version from 2 through "
+        f"{DatabaseManager.LATEST_SCHEMA_VERSION}; "
+        f"registered={sorted(registered_versions)}"
+    )
+
+    for version, (_, _, filename) in registered:
+        migration_path = migrations_dir / filename
+        assert migration_path.is_file(), (
+            f"Migration version {version} references missing file: {filename}"
+        )
+        prefix, separator, _ = filename.partition("_")
+        assert separator and prefix.isdigit(), (
+            f"Migration filename must start with a numeric prefix: {filename}"
+        )
+        assert int(prefix) == version, (
+            f"Migration filename prefix {prefix} does not match registered "
+            f"version {version}: {filename}"
+        )
+
+
 def test_unversioned_legacy_database_is_migrated_without_losing_data(tmp_path):
     db_file = tmp_path / "legacy_game.db"
     conn = sqlite3.connect(db_file)
@@ -151,6 +182,8 @@ def test_unversioned_legacy_database_is_migrated_without_losing_data(tmp_path):
 
     assert character["name"] == "Legacy Hero"
     assert character["prose_fingerprint"] is None
+    assert character["status"] == "active"
+    assert character["is_active"] == 1
     assert game_state["current_turn"] == 42
     assert game_state["game_day"] == 1
     assert version == DatabaseManager.LATEST_SCHEMA_VERSION
@@ -172,6 +205,8 @@ def test_version_2_database_receives_only_remaining_migration(tmp_path):
 
     assert character["name"] == "Versioned Hero"
     assert character["prose_fingerprint"] is None
+    assert character["status"] == "active"
+    assert character["is_active"] == 1
     assert state["current_turn"] == 19
     assert state["game_day"] == 6
     assert version == DatabaseManager.LATEST_SCHEMA_VERSION
@@ -360,10 +395,15 @@ def test_realistic_legacy_campaign_fixture_preserves_representative_data(tmp_pat
         ).fetchone(),
     }
     migrated_values = conn.execute(
-        "SELECT prose_fingerprint FROM characters WHERE id = 12"
-    ).fetchone()[0], conn.execute(
+        "SELECT prose_fingerprint, status, is_active FROM characters WHERE id = 12"
+    ).fetchone() + conn.execute(
         "SELECT game_day FROM game_state WHERE id = 1"
-    ).fetchone()[0]
+    ).fetchone()
+
+        "SELECT prose_fingerprint, status, is_active FROM characters WHERE id = 12"
+    ).fetchone() + conn.execute(
+        "SELECT game_day FROM game_state WHERE id = 1"
+    ).fetchone()
     version = conn.execute(
         "SELECT version FROM schema_version WHERE id = 1"
     ).fetchone()[0]
@@ -383,7 +423,7 @@ def test_realistic_legacy_campaign_fixture_preserves_representative_data(tmp_pat
         "game_state": (7, "investigation", 0, 42),
     }
     assert after == before
-    assert migrated_values == (None, 1)
+    assert migrated_values == (None, "active", 1, 1)
     assert version == DatabaseManager.LATEST_SCHEMA_VERSION
 
 
@@ -514,6 +554,62 @@ def test_get_facts_by_day_range(db):
     assert active_facts["f_day_5"]["game_day"] == 5
 
 
+def test_day_range_includes_boundaries_and_excludes_adjacent_days(db):
+    char_id = db.create_character("Boundary Keeper")
+    for day in (2, 3, 5, 6):
+        db.insert_conversational_fact(
+            f"f_day_{day}",
+            char_id,
+            f"An event on day {day}.",
+            [],
+            game_day=day,
+        )
+
+    facts = db.get_facts_by_day_range(char_id, start_day=3, end_day=5)
+
+    assert {fact["id"] for fact in facts} == {"f_day_3", "f_day_5"}
+    assert {fact["game_day"] for fact in facts} == {3, 5}
+
+
+@pytest.mark.parametrize(
+    ("start_day", "end_day", "message"),
+    [
+        (5, 4, "start_day must be less than or equal to end_day"),
+        (0, 1, "start_day must be a positive integer"),
+        (1, 0, "end_day must be a positive integer"),
+    ],
+)
+def test_get_facts_by_day_range_rejects_invalid_ranges(
+    db, start_day, end_day, message
+):
+    char_id = db.create_character("Range Checker")
+
+    with pytest.raises(ValueError, match=message):
+        db.get_facts_by_day_range(char_id, start_day, end_day)
+
+
+@pytest.mark.parametrize(
+    ("start_day", "end_day", "invalid_name"),
+    [
+        (1.5, 2, "start_day"),
+        ("1", 2, "start_day"),
+        (True, 2, "start_day"),
+        (None, 2, "start_day"),
+        (1, 2.5, "end_day"),
+        (1, "2", "end_day"),
+        (1, False, "end_day"),
+        (1, None, "end_day"),
+    ],
+)
+def test_get_facts_by_day_range_rejects_invalid_day_types(
+    db, start_day, end_day, invalid_name
+):
+    char_id = db.create_character("Type Checker")
+
+    with pytest.raises(ValueError, match=f"{invalid_name} must be a positive integer"):
+        db.get_facts_by_day_range(char_id, start_day, end_day)
+
+
 @pytest.mark.parametrize("invalid_day", [0, -1, 1.5, "2", True])
 def test_insert_fact_rejects_invalid_game_day(db, invalid_day):
     char_id = db.create_character("Chronologist")
@@ -528,6 +624,38 @@ def test_insert_fact_rejects_invalid_game_day(db, invalid_day):
         )
 
     assert db.get_active_facts(char_id) == []
+
+
+def test_ordinary_fact_update_preserves_original_game_day(db):
+    char_id = db.create_character("Chronicle Editor")
+    db.insert_conversational_fact(
+        "f_original_day", char_id, "The gate was closed.", [], game_day=2
+    )
+    db.update_game_day(9)
+
+    db.update_conversational_fact(
+        "f_original_day",
+        new_text="The gate was barred from within.",
+        confidence=0.98,
+    )
+
+    fact = db.get_active_facts(char_id)[0]
+    assert fact["fact_text"] == "The gate was barred from within."
+    assert fact["confidence"] == 0.98
+    assert fact["game_day"] == 2
+
+
+def test_fact_inserted_after_day_advance_uses_new_campaign_day(db):
+    char_id = db.create_character("Day Walker")
+    assert db.advance_game_day() == 2
+
+    db.insert_conversational_fact(
+        "f_after_advance", char_id, "A new dawn arrived.", []
+    )
+
+    fact = db.get_active_facts(char_id)[0]
+    assert fact["fact_text"] == "A new dawn arrived."
+    assert fact["game_day"] == 2
 
 
 def test_get_facts_by_day_range_decodes_references_and_embeddings(db):
@@ -563,34 +691,121 @@ def test_cosine_similarity_rejects_dimension_mismatch():
         cosine_similarity([1.0], [1.0, 2.0])
 
 
-def test_similarity_retrieval_ranks_and_limits_day_range_results(db):
-    """Combined retrieval uses cosine similarity after temporal filtering."""
-    char_id = db.create_character("Historian")
-    db.insert_conversational_fact(
-        "f_similar",
-        char_id,
-        "A goblin attacked at the bridge.",
-        ["goblin", "bridge"],
-        embedding=[1.0, 0.0],
-    )
-    db.insert_conversational_fact(
-        "f_less_similar",
-        char_id,
-        "The innkeeper mentioned wolves.",
-        ["innkeeper", "wolves"],
-        embedding=[0.5, 0.5],
-    )
+def _insert_semantic_fact(db, fact_id, character_id, embedding, **overrides):
+    values = {
+        "fact_text": f"Semantic fact {fact_id}",
+        "references": [],
+        "embedding": embedding,
+    }
+    values.update(overrides)
+    db.insert_conversational_fact(fact_id, character_id, **values)
+
+
+def test_semantic_retrieval_without_time_range_uses_all_days(db):
+    char_id = db.create_character("Semantic Historian")
+    _insert_semantic_fact(db, "day_1", char_id, [1.0, 0.0], game_day=1)
+    _insert_semantic_fact(db, "day_8", char_id, [0.8, 0.2], game_day=8)
+
+    facts = db.get_facts_by_day_range_with_similarity(char_id, [1.0, 0.0])
+
+    assert [fact["id"] for fact in facts] == ["day_1", "day_8"]
+    assert [fact["game_day"] for fact in facts] == [1, 8]
+
+
+def test_semantic_retrieval_with_complete_time_range_is_inclusive(db):
+    char_id = db.create_character("Ranged Semantic Historian")
+    for day in (2, 3, 5, 6):
+        _insert_semantic_fact(
+            db, f"day_{day}", char_id, [1.0, day / 10], game_day=day
+        )
 
     facts = db.get_facts_by_day_range_with_similarity(
-        char_id,
-        [1.0, 0.0],
-        start_day=1,
-        end_day=1,
-        limit=1,
+        char_id, [1.0, 0.0], start_day=3, end_day=5
     )
 
-    assert [fact["id"] for fact in facts] == ["f_similar"]
-    assert facts[0]["similarity"] == pytest.approx(1.0)
+    assert {fact["id"] for fact in facts} == {"day_3", "day_5"}
+    assert {fact["game_day"] for fact in facts} == {3, 5}
+
+
+@pytest.mark.parametrize(
+    ("start_day", "end_day"),
+    [(1, None), (None, 5)],
+)
+def test_semantic_retrieval_rejects_partial_time_range(db, start_day, end_day):
+    char_id = db.create_character("Partial Range Historian")
+
+    with pytest.raises(
+        ValueError, match="start_day and end_day must be provided together"
+    ):
+        db.get_facts_by_day_range_with_similarity(
+            char_id, [1.0, 0.0], start_day=start_day, end_day=end_day
+        )
+
+
+def test_semantic_retrieval_skips_facts_without_embeddings(db):
+    char_id = db.create_character("Embedding Curator")
+    _insert_semantic_fact(db, "embedded", char_id, [1.0, 0.0])
+    _insert_semantic_fact(db, "missing", char_id, None)
+
+    facts = db.get_facts_by_day_range_with_similarity(char_id, [1.0, 0.0])
+
+    assert [fact["id"] for fact in facts] == ["embedded"]
+
+
+def test_semantic_retrieval_rejects_incompatible_embedding_dimensions(db):
+    char_id = db.create_character("Vector Curator")
+    _insert_semantic_fact(db, "three_dimensions", char_id, [1.0, 0.0, 0.0])
+
+    with pytest.raises(ValueError, match="Embedding dimensions must match"):
+        db.get_facts_by_day_range_with_similarity(char_id, [1.0, 0.0])
+
+
+def test_semantic_retrieval_isolates_characters(db):
+    requested_id = db.create_character("Requested Character")
+    other_id = db.create_character("Other Character")
+    _insert_semantic_fact(db, "requested", requested_id, [0.8, 0.2])
+    _insert_semantic_fact(db, "other", other_id, [1.0, 0.0])
+
+    facts = db.get_facts_by_day_range_with_similarity(requested_id, [1.0, 0.0])
+
+    assert [fact["id"] for fact in facts] == ["requested"]
+    assert facts[0]["character_id"] == requested_id
+
+
+def test_semantic_retrieval_excludes_inactive_facts(db):
+    char_id = db.create_character("Active Fact Curator")
+    _insert_semantic_fact(db, "active", char_id, [0.8, 0.2])
+    _insert_semantic_fact(db, "inactive", char_id, [1.0, 0.0])
+    db.delete_conversational_fact("inactive")
+
+    facts = db.get_facts_by_day_range_with_similarity(char_id, [1.0, 0.0])
+
+    assert [fact["id"] for fact in facts] == ["active"]
+
+
+def test_semantic_retrieval_excludes_expired_facts(db):
+    char_id = db.create_character("Expiry Curator")
+    _insert_semantic_fact(db, "unexpired", char_id, [0.8, 0.2], expires_at_turn=6)
+    _insert_semantic_fact(db, "expired", char_id, [1.0, 0.0], expires_at_turn=5)
+    db.update_game_state({"current_turn": 5})
+
+    facts = db.get_facts_by_day_range_with_similarity(char_id, [1.0, 0.0])
+
+    assert [fact["id"] for fact in facts] == ["unexpired"]
+
+
+def test_semantic_retrieval_orders_equal_scores_by_fact_id(db):
+    char_id = db.create_character("Tie Break Curator")
+    _insert_semantic_fact(db, "fact_z", char_id, [1.0, 1.0])
+    _insert_semantic_fact(db, "fact_a", char_id, [1.0, 1.0])
+    _insert_semantic_fact(db, "fact_m", char_id, [1.0, 1.0])
+
+    first = db.get_facts_by_day_range_with_similarity(char_id, [1.0, 1.0])
+    second = db.get_facts_by_day_range_with_similarity(char_id, [1.0, 1.0])
+
+    assert [fact["id"] for fact in first] == ["fact_a", "fact_m", "fact_z"]
+    assert [fact["id"] for fact in second] == ["fact_a", "fact_m", "fact_z"]
+    assert [fact["similarity"] for fact in first] == pytest.approx([1.0, 1.0, 1.0])
 
 
 def test_game_day_can_be_updated_and_advanced(db):
