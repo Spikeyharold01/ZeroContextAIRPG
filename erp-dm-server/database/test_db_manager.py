@@ -400,10 +400,6 @@ def test_realistic_legacy_campaign_fixture_preserves_representative_data(tmp_pat
         "SELECT game_day FROM game_state WHERE id = 1"
     ).fetchone()
 
-        "SELECT prose_fingerprint, status, is_active FROM characters WHERE id = 12"
-    ).fetchone() + conn.execute(
-        "SELECT game_day FROM game_state WHERE id = 1"
-    ).fetchone()
     version = conn.execute(
         "SELECT version FROM schema_version WHERE id = 1"
     ).fetchone()[0]
