@@ -1,3 +1,24 @@
+# The Adaptive RPG/ERP Engine
+# It turns casual AI chatbots into permanent, living RPG worlds that never forget, never break character, and run with unprecedented speed and efficiency.
+# Copyright (C) 2026 Spikeyharold01 Stephen Dutton
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+#Contact Details - Stevedutton42@gmail.com
+#Source https://github.com/Spikeyharold01/ZeroContextAIRPG
+#
+
 # proxy_server/ingester.py
 
 """
@@ -13,6 +34,21 @@ Markers (configurable via settings):
     =SCENARIO=         : Optional. The current scenario / world state.
     =EXAMPLES=         : Optional. Example dialogue for few-shot learning.
     =USER=             : Optional. The user's own character stats (for games like D&D).
+
+Marker contract:
+- ``payload`` is a mapping whose ``messages`` value is a list of mappings.
+  Every message has string ``role`` and ``content`` values; structured content
+  is not accepted.
+- A marker is recognized only at character zero of a system message. Leading
+  whitespace or ordinary text before it prevents recognition.
+- Only the leading marker is interpreted. Any later marker-looking text in the
+  same message remains part of that section's content.
+- Repeated section messages are allowed and the last occurrence wins.
+- Surrounding whitespace is stripped from section content. The character-card
+  section must be non-empty; optional sections may be absent or empty.
+- The final user message is the request. Every other message is chat history,
+  and the request is considered the first message exactly when that history has
+  no assistant message.
 """
 
 import re
@@ -73,7 +109,7 @@ class Ingester:
         """
         Main entry point: process the raw SillyTavern payload.
         """
-        messages = payload.get("messages", [])
+        messages = self._validate_payload(payload)
 
         user_message = self._extract_user_message(messages)
         chat_history = self._extract_chat_history(messages)
@@ -140,6 +176,25 @@ class Ingester:
             sampling_params=sampling_params,
             raw_payload=payload,
         )
+
+    @staticmethod
+    def _validate_payload(payload: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Validate the message shape required by the marker contract."""
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be a mapping")
+
+        messages = payload.get("messages", [])
+        if not isinstance(messages, list):
+            raise ValueError("payload.messages must be a list")
+
+        for index, message in enumerate(messages):
+            if not isinstance(message, dict):
+                raise ValueError(f"messages[{index}] must be a mapping")
+            if not isinstance(message.get("role"), str):
+                raise ValueError(f"messages[{index}].role must be a string")
+            if not isinstance(message.get("content"), str):
+                raise ValueError(f"messages[{index}].content must be a string")
+        return messages
 
     def _extract_sections(self, system_prompts: List[Dict]) -> Dict[str, str]:
         """Extract each section by looking for the marker at the start."""

@@ -1,3 +1,24 @@
+# The Adaptive RPG/ERP Engine
+# It turns casual AI chatbots into permanent, living RPG worlds that never forget, never break character, and run with unprecedented speed and efficiency.
+# Copyright (C) 2026 Spikeyharold01 Stephen Dutton
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+#Contact Details - Stevedutton42@gmail.com
+#Source https://github.com/Spikeyharold01/ZeroContextAIRPG
+#
+
 """
 config.py
 
@@ -493,10 +514,6 @@ def engine_load(cls):
     _apply_environment_overrides(config)
     _validate(config)
 
-    if not CONFIG_FILE.exists():
-        logger.info("Creating default engine.toml")
-        _save_to_file(config)
-
     _log_summary(config)
     return config
 
@@ -512,6 +529,13 @@ EngineConfig.save = engine_save
 
 def auto_configure() -> EngineConfig:
     return EngineConfig.load()
+
+
+def initialize_configuration() -> EngineConfig:
+    """Load the effective configuration and explicitly persist it."""
+    config = EngineConfig.load()
+    config.save()
+    return config
 
 
 # ==========================================================
@@ -530,3 +554,6 @@ MARKER_SYSTEM_PROMPT = settings.markers.system_prompt
 MARKER_SCENARIO = settings.markers.scenario
 MARKER_EXAMPLES = settings.markers.examples
 MARKER_USER = settings.markers.user_character
+
+if __name__ == "__main__":
+    initialize_configuration()

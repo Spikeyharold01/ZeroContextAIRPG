@@ -1,3 +1,24 @@
+# The Adaptive RPG/ERP Engine
+# It turns casual AI chatbots into permanent, living RPG worlds that never forget, never break character, and run with unprecedented speed and efficiency.
+# Copyright (C) 2026 Spikeyharold01 Stephen Dutton
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+#Contact Details - Stevedutton42@gmail.com
+#Source https://github.com/Spikeyharold01/ZeroContextAIRPG
+#
+
 # database/db_manager.py
 
 import sqlite3
@@ -68,10 +89,12 @@ class EmbeddingUtils:
 class DatabaseManager:
     """Complete database manager for the Adaptive RPG/ERP Engine v5.2."""
 
-    LATEST_SCHEMA_VERSION = 3
+    LATEST_SCHEMA_VERSION = 5
     _MIGRATIONS = {
         2: ("game_state", "game_day", "002_add_game_day.sql"),
         3: ("characters", "prose_fingerprint", "003_add_prose_fingerprint.sql"),
+        4: ("characters", "status", "004_add_character_status.sql"),
+        5: ("characters", "is_active", "005_add_character_is_active.sql"),
     }
 
     # ---------- WHITELISTS for dynamic update methods ----------
@@ -87,7 +110,7 @@ class DatabaseManager:
             "name", "type", "character_core", "speech_patterns", "mannerisms",
             "physical_description", "goals", "scenario_plot", "plot_state",
             "current_goal", "hidden_goal", "immediate_beat", "long_arc", "tension",
-            "current_location_id"
+            "current_location_id", "status", "is_active"
         },
         "world_state": {
             "war_active", "bridge_destroyed", "festival_active", "moon_phase",
@@ -617,7 +640,13 @@ class DatabaseManager:
         return result
         
     def get_facts_by_day_range(self, character_id: int, start_day: int, end_day: int) -> List[Dict]:
-        """Get facts within a day range."""
+        """Get facts within an inclusive, positive-integer day range."""
+        for name, day in (("start_day", start_day), ("end_day", end_day)):
+            if isinstance(day, bool) or not isinstance(day, int) or day < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        if start_day > end_day:
+            raise ValueError("start_day must be less than or equal to end_day")
+
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
@@ -648,10 +677,16 @@ class DatabaseManager:
         return result
 
     def get_facts_by_day_range_with_similarity(self, character_id: int, user_embedding: List[float], start_day: int = None, end_day: int = None, limit: int = 5) -> List[Dict]:
-        """
-        Retrieve facts within optional day range and compute cosine similarity in‑process.
-        """
-        # 1. Build SQL query with optional day filter
+        """Retrieve active, unexpired facts ranked by cosine similarity."""
+        if (start_day is None) != (end_day is None):
+            raise ValueError("start_day and end_day must be provided together")
+        if start_day is not None:
+            for name, day in (("start_day", start_day), ("end_day", end_day)):
+                if isinstance(day, bool) or not isinstance(day, int) or day < 1:
+                    raise ValueError(f"{name} must be a positive integer")
+            if start_day > end_day:
+                raise ValueError("start_day must be less than or equal to end_day")
+
         query = """
             SELECT id, character_id, fact_text, fact_references AS "references",
                    embedding, importance, confidence, source_type,
@@ -660,13 +695,13 @@ class DatabaseManager:
             FROM conversational_facts
             WHERE is_active = 1
               AND character_id = ?
+              AND (expires_at_turn IS NULL OR expires_at_turn > ?)
         """
-        params = [character_id]
-        if start_day is not None and end_day is not None:
+        current_turn = self.get_game_state().get("current_turn", 0)
+        params = [character_id, current_turn]
+        if start_day is not None:
             query += " AND game_day >= ? AND game_day <= ?"
             params.extend([start_day, end_day])
-
-        query += " ORDER BY created_turn DESC"
 
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -674,18 +709,15 @@ class DatabaseManager:
         rows = cursor.fetchall()
         conn.close()
 
-        # 2. Compute similarity in‑process
         results = []
         for row in rows:
             data = dict(row)
-            if 'embedding' in data and data['embedding']:
-                fact_embedding = EmbeddingUtils.from_bytes(data['embedding'])
-                similarity = cosine_similarity(user_embedding, fact_embedding)
-                data['similarity'] = similarity
+            if data.get("embedding"):
+                fact_embedding = EmbeddingUtils.from_bytes(data["embedding"])
+                data["similarity"] = cosine_similarity(user_embedding, fact_embedding)
                 results.append(data)
 
-        # 3. Sort by similarity descending and limit
-        results.sort(key=lambda x: x['similarity'], reverse=True)
+        results.sort(key=lambda result: (-result["similarity"], result["id"]))
         return results[:limit]
 
     def insert_conversational_fact(
@@ -750,7 +782,10 @@ class DatabaseManager:
         fact_type: str = None,              # NEW
         source_character_id: int = None     # NEW
     ):
-        """Update an existing fact. DB column is 'fact_references'."""
+        """Update an existing fact without changing its original game_day.
+
+        DB column is ``fact_references``.
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
         updates = {}
