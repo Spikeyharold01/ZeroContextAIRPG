@@ -88,6 +88,32 @@ def test_schema_executes_cleanly(db, tmp_path):
     assert version == DatabaseManager.LATEST_SCHEMA_VERSION
 
 
+def test_manager_connections_enable_foreign_keys(db):
+    conn = db._get_connection()
+    try:
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_current_foreign_keys_use_no_action_delete_and_update_rules(db):
+    conn = db._get_connection()
+    try:
+        foreign_keys = []
+        for table_row in conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        ):
+            table = table_row["name"]
+            foreign_keys.extend(conn.execute(f'PRAGMA foreign_key_list("{table}")'))
+    finally:
+        conn.close()
+
+    assert foreign_keys
+    assert {row["on_delete"] for row in foreign_keys} == {"NO ACTION"}
+    assert {row["on_update"] for row in foreign_keys} == {"NO ACTION"}
+
+
 def _create_versioned_database(db_file, version):
     conn = sqlite3.connect(db_file)
     conn.executescript(f"""
@@ -116,8 +142,9 @@ def _use_temporary_migrations(monkeypatch, tmp_path):
     migrations_dir = database_dir / "migrations"
     migrations_dir.mkdir(parents=True)
     source_dir = Path(db_manager_module.__file__).parent / "migrations"
-    for migration in source_dir.glob("*.sql"):
-        shutil.copy2(migration, migrations_dir / migration.name)
+    for pattern in ("*.sql", "*.py"):
+        for migration in source_dir.glob(pattern):
+            shutil.copy2(migration, migrations_dir / migration.name)
     monkeypatch.setattr(db_manager_module, "__file__", str(database_dir / "db_manager.py"))
     return migrations_dir
 
@@ -330,9 +357,15 @@ def test_failed_migration_rolls_back_schema_version_and_prior_migrations(
     current_turn = conn.execute(
         "SELECT current_turn FROM game_state WHERE id = 1"
     ).fetchone()[0]
-    version_row = conn.execute(
-        "SELECT version FROM schema_version WHERE id = 1"
+    has_version_table = conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'schema_version'"
     ).fetchone()
+    version_row = (
+        conn.execute("SELECT version FROM schema_version WHERE id = 1").fetchone()
+        if has_version_table
+        else None
+    )
     conn.close()
 
     assert "prose_fingerprint" not in character_columns
@@ -492,6 +525,7 @@ def test_fact_insert_and_read_decodes(db):
 def test_fact_update_changes_fields(db):
     """Test 7: Fact update changes text/confidence/reference and newly added type fields."""
     char_id = db.create_character("Peasant")
+    source_id = db.create_character("Witness")
     
     db.insert_conversational_fact("f_1", char_id, "Old text", ["old"], confidence=0.5)
     
@@ -501,13 +535,58 @@ def test_fact_update_changes_fields(db):
         new_references=["new"], 
         confidence=0.95,
         fact_type="belief_fact",
-        source_character_id=99
+        source_character_id=source_id
     )
     
     facts = db.get_active_facts(char_id)
     assert facts[0]["fact_text"] == "New text"
     assert facts[0]["fact_type"] == "belief_fact"
-    assert facts[0]["source_character_id"] == 99
+    assert facts[0]["source_character_id"] == source_id
+
+
+def test_invalid_character_reference_is_rejected(db):
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+        db.insert_conversational_fact(
+            "invalid_character",
+            999_999,
+            "This character does not exist.",
+            [],
+        )
+
+
+def test_invalid_location_reference_is_rejected(db):
+    character_id = db.create_character("Lost Traveller")
+
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+        db.update_character_location(character_id, 999_999)
+
+
+def test_invalid_belief_source_character_reference_is_rejected(db):
+    character_id = db.create_character("Listener")
+
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+        db.insert_conversational_fact(
+            "invalid_belief_source",
+            character_id,
+            "A missing witness made this claim.",
+            [],
+            fact_type="belief_fact",
+            source_character_id=999_999,
+        )
+
+
+def test_character_soft_deletion_preserves_related_rows(db):
+    character_id = db.create_character("Retired Hero")
+    db.insert_conversational_fact(
+        "retired_fact", character_id, "The hero once served the crown.", []
+    )
+
+    db.update_character(character_id, {"status": "inactive", "is_active": 0})
+
+    assert db.get_character(character_id)["is_active"] == 0
+    assert db.get_emotional_state(character_id) is not None
+    assert db.get_mechanical_stats(character_id) is not None
+    assert db.get_active_facts(character_id)[0]["id"] == "retired_fact"
 
 
 def test_fact_filtering_by_type(db):

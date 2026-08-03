@@ -65,18 +65,21 @@ class DnDIngester:
         if not card_text:
             return {}
 
-        # Find the D&D STATS section
+        # Keep the complete card available to the section parsers. Individual
+        # sections are already bounded by the next ``[TAG]`` marker, while a
+        # blank line is valid formatting between sections in the documented
+        # character-sheet format.
         match = re.search(
-            r"\[D&D STATS\](.*?)(?=\n\n|$)",
+            r"\[D&D STATS\]",
             card_text,
-            re.IGNORECASE | re.DOTALL
+            re.IGNORECASE,
         )
         if not match:
             # Fallback: try to parse the whole card
             logger.warning("No [D&D STATS] section found. Parsing whole card.")
             section_text = card_text
         else:
-            section_text = match.group(1)
+            section_text = card_text[match.start():]
 
         stats = {}
 
@@ -95,9 +98,17 @@ class DnDIngester:
         # 2. ABILITIES
         # ============================================================
         abilities = self._parse_section(section_text, "ABILITIES")
-        for ability in ["STR", "DEX", "CON", "INT", "WIS", "CHA"]:
+        ability_names = {
+            "STR": "strength",
+            "DEX": "dexterity",
+            "CON": "constitution",
+            "INT": "intelligence",
+            "WIS": "wisdom",
+            "CHA": "charisma",
+        }
+        for ability, field_name in ability_names.items():
             if ability in abilities:
-                stats[ability.lower()] = self._to_int(abilities[ability])
+                stats[field_name] = self._to_int(abilities[ability])
 
         # ============================================================
         # 3. COMBAT STATS
