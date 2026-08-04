@@ -1,28 +1,22 @@
-"""Public typed runtime contracts for the future proxy."""
+"""Public campaign-neutral runtime contracts for the future proxy."""
 
 from .common import (
     BoundedJsonPatch,
+    BoundedJsonValue,
     InternalStrictModel,
+    NamespaceIdentifier,
     OpenAIMessageModel,
     OpenAIRequestModel,
-    validate_bounded_json_patch,
+    RegistryIdentifier,
+    SubjectIdentifier,
+    SubjectTypeIdentifier,
 )
-from .ingestion import (
-    ParsedIngestedContext,
-    RecentExchange,
-    ResolvedTurnContext,
-    SamplingParameters,
-)
+from .ingestion import ParsedIngestedContext, RecentExchange, ResolvedTurnContext, SamplingParameters
 from .mechanics import (
     ConditionAddUpdate,
-    ConditionName,
     ConditionRemoveUpdate,
     DeterministicMechanicalUpdate,
-    HpDamageUpdate,
-    HpHealingUpdate,
-    HpSetUpdate,
     ResourceDeltaUpdate,
-    ResourceName,
 )
 from .openai import (
     AssistantResponseMessage,
@@ -38,63 +32,34 @@ from .openai import (
     StringChatMessage,
     TokenUsage,
 )
-from .rules import DiceRollRequest, RulesAdjudicationResult
+from .rules import GenericRollRequest, RulesAdjudicationResult
+from .state import (
+    AddSetMember,
+    EntityReference,
+    ExpectedObject,
+    ExpectedValue,
+    MergeObject,
+    RemoveSetMember,
+    RemoveValue,
+    SetValue,
+    StateOperation,
+    StatePatch,
+    StatePath,
+    StatePathSegment,
+    StateTarget,
+)
 from .storyteller import (
+    AddSceneEntity,
     AppliedEmotionalAxisChange,
     ConversationalFactCandidate,
-    EmotionalAxisDeltas,
     EmotionalShift,
     MajorEvent,
-    PlotStateUpdate,
-    SceneGraphPatch,
-    SceneObjectPatch,
+    RemoveSceneEntity,
+    RemoveSceneRelation,
+    SceneGraphOperation,
     StorytellerOutput,
     StorytellerStateUpdate,
-    WorldStatePatch,
+    UpsertSceneRelation,
 )
 
-__all__ = [
-    "AppliedEmotionalAxisChange",
-    "AssistantResponseMessage",
-    "BoundedJsonPatch",
-    "ChatCompletionChunk",
-    "ChatCompletionRequest",
-    "ChatCompletionRequestBase",
-    "ChatCompletionResponse",
-    "CompletionChoice",
-    "ConditionAddUpdate",
-    "ConditionName",
-    "ConditionRemoveUpdate",
-    "ConversationalFactCandidate",
-    "DeterministicMechanicalUpdate",
-    "DiceRollRequest",
-    "EmotionalAxisDeltas",
-    "EmotionalShift",
-    "HpDamageUpdate",
-    "HpHealingUpdate",
-    "HpSetUpdate",
-    "InternalStrictModel",
-    "MajorEvent",
-    "NonStreamingChatCompletionRequest",
-    "OpenAIMessageModel",
-    "OpenAIRequestModel",
-    "ParsedIngestedContext",
-    "PlotStateUpdate",
-    "RecentExchange",
-    "ResolvedTurnContext",
-    "ResourceDeltaUpdate",
-    "ResourceName",
-    "RulesAdjudicationResult",
-    "SamplingParameters",
-    "SceneGraphPatch",
-    "SceneObjectPatch",
-    "StreamChoice",
-    "StreamDelta",
-    "StreamingChatCompletionRequest",
-    "StringChatMessage",
-    "StorytellerOutput",
-    "StorytellerStateUpdate",
-    "TokenUsage",
-    "WorldStatePatch",
-    "validate_bounded_json_patch",
-]
+__all__ = [name for name in globals() if not name.startswith("_")]

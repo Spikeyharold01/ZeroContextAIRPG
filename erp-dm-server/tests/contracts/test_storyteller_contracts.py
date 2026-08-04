@@ -1,168 +1,212 @@
-from datetime import datetime
-import math
+import json
+from uuid import uuid4
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 import pytest
 
-from contracts.common import MAX_PATCH_BYTES
+from contracts.state import (
+    StateOperation,
+    StatePatch,
+    StatePatchConflict,
+    StateTarget,
+    apply_state_patch,
+)
 from contracts.storyteller import (
+    AddSceneEntity,
     AppliedEmotionalAxisChange,
     ConversationalFactCandidate,
-    EmotionalAxisDeltas,
     EmotionalShift,
     MajorEvent,
-    PlotStateUpdate,
-    SceneGraphPatch,
+    RemoveSceneEntity,
+    RemoveSceneRelation,
     StorytellerOutput,
     StorytellerStateUpdate,
-    WorldStatePatch,
+    UpsertSceneRelation,
 )
 
 
-def nested_patch(container_depth):
-    value = True
-    for index in range(container_depth):
-        value = {f"level{index}": value}
-    return value
-
-
-def test_patch_depth_five_accepted_and_six_rejected():
-    assert PlotStateUpdate(character_id=1, plot_state_patch=nested_patch(5))
-    with pytest.raises(ValidationError, match="nesting depth"):
-        PlotStateUpdate(character_id=1, plot_state_patch=nested_patch(6))
-
-
-def test_patch_key_count_limits():
-    assert WorldStatePatch(additional_state_patch={f"key{i}": i for i in range(100)})
-    with pytest.raises(ValidationError, match="key count"):
-        WorldStatePatch(additional_state_patch={f"key{i}": i for i in range(101)})
-
-
-def test_patch_serialized_size_limits():
-    # Account for the compact JSON wrapper: {"value":"..."}.
-    accepted = {"value": "x" * (MAX_PATCH_BYTES - 12)}
-    assert WorldStatePatch(additional_state_patch=accepted)
-    with pytest.raises(ValidationError, match="serialized size"):
-        WorldStatePatch(additional_state_patch={"value": "x" * MAX_PATCH_BYTES})
-
-
-@pytest.mark.parametrize("patch", [
-    {"": 1}, {"   ": 1}, {"x" * 129: 1}, {"_private": 1}, {"$operator": 1},
-    {"value": float("nan")}, {"value": float("inf")},
-    {"value": (1, 2)}, {"value": {1, 2}}, {"value": b"bytes"},
-    {"value": datetime.now()}, {"value": object()},
-])
-def test_invalid_patch_values_are_rejected(patch):
-    with pytest.raises(ValidationError):
-        WorldStatePatch(additional_state_patch=patch)
-
-
-def test_valid_json_patch_values_are_accepted():
-    patch = {
-        "string": "x", "integer": 1, "number": 1.5, "boolean": True,
-        "nothing": None, "list": [1, "two", False], "object": {"nested": 3},
+def patch(operations, **updates):
+    data = {
+        "target": {
+            "namespace": "campaign.world",
+            "subject_type": "core.campaign",
+            "subject_id": "primary",
+        },
+        "operations": operations,
+        "idempotency_key": uuid4(),
     }
-    assert WorldStatePatch(additional_state_patch=patch).additional_state_patch == patch
+    data.update(updates)
+    return StatePatch.model_validate(data)
 
 
-def test_fact_provenance_and_score_rules():
-    belief = ConversationalFactCandidate(
-        character_id=1, text="Mara believes it.", fact_type="belief_fact",
-        source_character_id=1, confidence=1.0, importance=0.0,
-    )
-    assert belief.source_character_id == 1
-    for fact_type in ("belief_fact", "rumor_fact"):
-        with pytest.raises(ValidationError, match="source_character_id"):
-            ConversationalFactCandidate(
-                character_id=1, text="Claim", fact_type=fact_type
-            )
-    with pytest.raises(ValidationError, match="world facts"):
-        ConversationalFactCandidate(
-            character_id=1, text="Truth", fact_type="world_fact",
-            source_character_id=1,
-        )
-    for field, value in (("confidence", -0.1), ("importance", 1.1)):
-        with pytest.raises(ValidationError):
-            ConversationalFactCandidate.model_validate({
-                "character_id": 1, "text": "Fact", field: value,
-            })
-    for proxy_owned_field in (
-        "id", "embedding", "created_turn", "last_referenced_turn",
-        "expires_at_turn", "timestamp",
+@pytest.mark.parametrize("path,value", [
+    (["kingdoms", "north", "ruler"], "Queen Mara"),
+    (["starships", "odyssey", "reactor"], {"output": 91, "stable": True}),
+    (["investigation", "sanity", "clock"], 4),
+])
+def test_arbitrary_genre_state_needs_no_predefined_property(path, value):
+    result, revision = apply_state_patch({}, 0, patch([{"op": "set", "path": path, "value": value}]))
+    current = result
+    for segment in path:
+        current = current[segment]
+    assert current == value
+    assert revision == 1
+
+
+def test_fixed_example_and_narrative_fields_are_absent():
+    state_schema = json.dumps(StatePatch.model_json_schema())
+    storyteller_schema = json.dumps(StorytellerStateUpdate.model_json_schema())
+    for forbidden in (
+        "war_active", "bridge_destroyed", "festival_active", "moon_phase",
+        "weather", "visibility", "current_goal", "hidden_goal",
+        "immediate_beat", "long_arc", "tension", "trust", "fear", "arousal",
+        "intimacy", "table", "column",
     ):
-        with pytest.raises(ValidationError):
-            ConversationalFactCandidate.model_validate({
-                "character_id": 1, "text": "Fact", proxy_owned_field: 1,
-            })
+        assert f'"{forbidden}"' not in state_schema
+        assert f'"{forbidden}"' not in storyteller_schema
 
 
-def test_plot_updates_are_explicit_nonempty_patches():
-    assert PlotStateUpdate(character_id=1, current_goal="Continue")
+@pytest.mark.parametrize("identifier", ["core.discovery", "dnd5e.combat", "campaign.coronation"])
+def test_registry_identifiers_accept_namespaced_values(identifier):
+    assert MajorEvent(text="Something happened", event_type=identifier).event_type == identifier
+
+
+@pytest.mark.parametrize("identifier", ["combat", "_private.value", "$private.value", "Engine.Internal"])
+def test_invalid_registry_identifiers_are_rejected(identifier):
     with pytest.raises(ValidationError):
-        PlotStateUpdate(character_id=1, current_goal="")
-    with pytest.raises(ValidationError):
-        PlotStateUpdate.model_validate({
-            "character_id": 1, "plot_state": {"replace": "everything"}
-        })
+        MajorEvent(text="Something happened", event_type=identifier)
+    if identifier == "Engine.Internal":
+        return
 
 
-def test_major_event_uses_one_optional_character_and_known_type():
-    assert MajorEvent(
-        text="Found it", event_type="discovery", character_id=1
-    ).character_id == 1
-    with pytest.raises(ValidationError):
-        MajorEvent.model_validate({
-            "text": "Found it", "event_type": "discovery", "character_ids": [1, 2]
-        })
-    with pytest.raises(ValidationError):
-        MajorEvent(text="Found it", event_type="unexpected")
+def test_reserved_namespaces_are_rejected():
+    with pytest.raises(ValidationError, match="reserved"):
+        StateTarget(namespace="engine.internal", subject_type="core.campaign", subject_id="primary")
 
 
-def test_emotional_proposal_bounds_and_applied_result_distinction():
-    assert EmotionalAxisDeltas(trust=-20).trust == -20
-    assert EmotionalAxisDeltas(trust=20).trust == 20
+def test_path_limits_and_no_positional_array_operations():
+    assert patch([{"op": "set", "path": ["x"] * 16, "value": 1}])
     with pytest.raises(ValidationError):
-        EmotionalAxisDeltas(trust=21)
+        patch([{"op": "set", "path": ["x"] * 17, "value": 1}])
+    with pytest.raises(ValidationError):
+        patch([{"op": "set", "path": ["x" * 129], "value": 1}])
+    schema = json.dumps(TypeAdapter(StateOperation).json_schema())
+    for forbidden in ("insert", "index", "position"):
+        assert f'"{forbidden}"' not in schema
+
+
+def test_operation_count_and_json_payload_bounds_are_enforced():
+    assert patch([{"op": "set", "path": [f"key-{i}"], "value": i} for i in range(100)])
+    with pytest.raises(ValidationError):
+        patch([{"op": "set", "path": [f"key-{i}"], "value": i} for i in range(101)])
+    with pytest.raises(ValidationError, match="nesting depth"):
+        patch([{"op": "set", "path": ["nested"],
+                "value": {"a": {"b": {"c": {"d": {"e": {"f": 1}}}}}}}])
+    with pytest.raises(ValidationError, match="serialized size"):
+        patch([{"op": "set", "path": ["large"], "value": "x" * (32 * 1024)}])
+    assert patch([{"op": "set", "path": ["object"],
+                   "value": {f"key-{i}": i for i in range(100)}}])
+    with pytest.raises(ValidationError, match="key count"):
+        patch([{"op": "set", "path": ["object"],
+                "value": {f"key-{i}": i for i in range(101)}}])
+
+
+@pytest.mark.parametrize("value", [
+    {"_private": 1}, {"$operator": 1}, {"bad": float("nan")},
+    {"bad": float("inf")}, {"bad": (1, 2)}, {"bad": b"bytes"},
+])
+def test_state_values_reject_reserved_keys_and_non_json_values(value):
+    with pytest.raises(ValidationError):
+        patch([{"op": "set", "path": ["value"], "value": value}])
+
+
+def test_explicit_null_is_distinct_from_remove_and_missing_remove_policy():
+    state, _ = apply_state_patch({"flag": True}, 0, patch([{"op": "set", "path": ["flag"], "value": None}]))
+    assert "flag" in state and state["flag"] is None
+    state, _ = apply_state_patch(state, 1, patch([{"op": "remove", "path": ["flag"]}]))
+    assert "flag" not in state
+    with pytest.raises(StatePatchConflict, match="missing"):
+        apply_state_patch({}, 0, patch([{"op": "remove", "path": ["flag"]}]))
+    assert apply_state_patch({}, 0, patch([{"op": "remove", "path": ["flag"], "missing_ok": True}]))[0] == {}
+
+
+def test_merge_is_shallow_and_operations_are_ordered():
+    original = {"faction": {"leader": {"name": "Mara", "rank": 3}, "power": 2}}
+    state, _ = apply_state_patch(original, 0, patch([
+        {"op": "merge_object", "path": ["faction"], "value": {"leader": {"name": "Ivo"}}},
+        {"op": "set", "path": ["faction", "power"], "value": 4},
+    ]))
+    assert state == {"faction": {"leader": {"name": "Ivo"}, "power": 4}}
+
+
+def test_set_members_use_canonical_equality_and_add_is_idempotent():
+    member_a = {"id": 1, "kind": "discovery"}
+    member_b = {"kind": "discovery", "id": 1}
+    state, _ = apply_state_patch({"known": [member_a]}, 0, patch([
+        {"op": "add_set_member", "path": ["known"], "member": member_b},
+    ]))
+    assert len(state["known"]) == 1
+    state, _ = apply_state_patch(state, 1, patch([
+        {"op": "remove_set_member", "path": ["known"], "member": member_b},
+    ]))
+    assert state["known"] == []
+
+
+def test_expected_or_revision_conflict_rejects_complete_patch():
+    original = {"a": 1, "b": 2}
+    expected_conflict = patch([
+        {"op": "set", "path": ["a"], "value": 9},
+        {"op": "set", "path": ["b"], "value": 8, "expected": {"value": 99}},
+    ])
+    with pytest.raises(StatePatchConflict):
+        apply_state_patch(original, 4, expected_conflict)
+    assert original == {"a": 1, "b": 2}
+    with pytest.raises(StatePatchConflict, match="revision"):
+        apply_state_patch(original, 4, patch([{"op": "set", "path": ["a"], "value": 3}], base_revision=3))
+
+
+def test_emotional_axis_is_configurable_and_preserves_application_result():
     shift = EmotionalShift(
-        character_id=1, deltas={"trust": 20}, description="Promise kept",
-        confidence=0.8,
+        character_id=1, affect_axis_definition_id="campaign.resolve",
+        proposed_delta=20, description="Held firm", confidence=0.8,
     )
-    assert shift.deltas.trust == 20  # no database-aware clamping here
+    assert shift.proposed_delta == 20
     applied = AppliedEmotionalAxisChange(
-        axis="trust", value_before=95, proposed_delta=20, proposed_result=115,
-        applied_delta=5, value_after=100, boundary_adjusted=True,
+        affect_axis_definition_id="campaign.resolve", value_before=95,
+        proposed_delta=20, proposed_result=115, applied_delta=5,
+        value_after=100, boundary_adjusted=True,
     )
-    assert applied.proposed_result == 115
-    assert applied.value_after == 100
+    assert applied.proposed_result == 115 and applied.value_after == 100
+    assert EmotionalShift(character_id=1, affect_axis_definition_id="campaign.resolve",
+                          proposed_delta=21, description="Profile validates later",
+                          confidence=0.8).proposed_delta == 21
     with pytest.raises(ValidationError):
-        AppliedEmotionalAxisChange(
-            axis="trust", value_before=95, proposed_delta=20, proposed_result=100,
-            applied_delta=5, value_after=100, boundary_adjusted=True,
-        )
+        EmotionalShift(character_id=1, affect_axis_definition_id="campaign.resolve",
+                       proposed_delta=float("inf"), description="Invalid", confidence=0.8)
 
 
-def test_scene_patch_conflicts_are_rejected():
+def test_fact_proxy_ownership_and_storyteller_mechanics_forbidden():
     with pytest.raises(ValidationError):
-        SceneGraphPatch(
-            location_id=1,
-            upsert_objects=[{"object_name": "Door", "object_state": "open"}],
-            remove_objects=["door"],
-        )
+        ConversationalFactCandidate(character_id=1, text="Fact", embedding=[1.0])
+    output = StorytellerOutput(narrative="Visible", state_update={})
+    assert output.narrative == "Visible"
     with pytest.raises(ValidationError):
-        SceneGraphPatch(location_id=1, add_npc_ids=[1], remove_npc_ids=[1])
+        StorytellerStateUpdate(mechanical_updates=[])
 
 
-def test_hidden_state_is_separate_and_mechanics_are_forbidden():
-    output = StorytellerOutput(
-        narrative="The door opens.", state_update=StorytellerStateUpdate()
-    )
-    assert output.narrative == "The door opens."
-    assert output.state_update.model_dump() != output.narrative
-    with pytest.raises(ValidationError):
-        StorytellerStateUpdate.model_validate({
-            "mechanical_updates": [{"operation": "hp_damage"}]
-        })
-    with pytest.raises(ValidationError):
-        StorytellerOutput.model_validate({
-            "narrative": "Visible", "state_update": {}, "hidden_goal": "secret"
-        })
+def test_scene_topology_is_generic_and_has_no_object_or_npc_taxonomy():
+    entity = {"entity_kind": "campaign.starship", "entity_id": "odyssey"}
+    location = {"entity_kind": "campaign.starport", "entity_id": "ceres"}
+    operations = [
+        AddSceneEntity(op="add_entity", scene_id="dock-7", entity=entity),
+        RemoveSceneEntity(op="remove_entity", scene_id="dock-7", entity=entity),
+        UpsertSceneRelation(op="upsert_relation", scene_id="dock-7", relation_id="docked",
+                            relation_type="campaign.docked-at", source=entity, target=location),
+        RemoveSceneRelation(op="remove_relation", scene_id="dock-7", relation_id="docked"),
+    ]
+    assert [operation.op for operation in operations] == [
+        "add_entity", "remove_entity", "upsert_relation", "remove_relation",
+    ]
+    schema = json.dumps(StorytellerStateUpdate.model_json_schema())
+    for forbidden in ('"object_name"', '"npc_present"', '"visibility"'):
+        assert forbidden not in schema

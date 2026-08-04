@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import Field, JsonValue, model_validator
 
-from .common import InternalStrictModel, PositiveCharacterId, PositiveLocationId, UnitInterval
+from .common import InternalStrictModel, PositiveCharacterId, PositiveLocationId, RegistryIdentifier, UnitInterval
 from .openai import StringChatMessage
 
 
@@ -61,7 +61,8 @@ class ResolvedTurnContext(InternalStrictModel):
     parsed: ParsedIngestedContext
     character_id: PositiveCharacterId
     character_name: Annotated[str, Field(min_length=1, max_length=256)]
-    character_type: Literal["PC", "NPC", "Monster"]
+    entity_kind: RegistryIdentifier
+    control_type: RegistryIdentifier
     character_is_active: Literal[True]
     current_location_id: PositiveLocationId | None = None
     history_exchange_limit: Annotated[int, Field(ge=1, le=50)]

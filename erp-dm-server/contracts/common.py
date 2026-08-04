@@ -38,21 +38,23 @@ UnitInterval = Annotated[float, Field(ge=0.0, le=1.0)]
 PositiveCharacterId = Annotated[int, Field(gt=0)]
 PositiveLocationId = Annotated[int, Field(gt=0)]
 
+RegistryIdentifier = Annotated[
+    str,
+    Field(
+        min_length=3,
+        max_length=128,
+        pattern=r"^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$",
+    ),
+]
+NamespaceIdentifier = RegistryIdentifier
+SubjectIdentifier = Annotated[
+    str,
+    Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$"),
+]
+SubjectTypeIdentifier = RegistryIdentifier
+
 FactType = Literal["world_fact", "belief_fact", "rumor_fact"]
 FactSourceType = Literal["user", "narrative", "system", "rules"]
-IntentType = Literal["narrative", "combat", "skill_check"]
-EventType = Literal[
-    "combat",
-    "death",
-    "marriage",
-    "discovery",
-    "betrayal",
-    "relationship",
-    "location_change",
-    "quest",
-    "world_change",
-    "other",
-]
 
 MAX_PATCH_DEPTH = 5
 MAX_PATCH_KEYS = 100
@@ -60,14 +62,14 @@ MAX_PATCH_BYTES = 32 * 1024
 MAX_PATCH_KEY_LENGTH = 128
 
 
-def validate_bounded_json_patch(value: Any) -> Any:
+def validate_bounded_json_value(value: Any, *, require_object: bool = False) -> Any:
     """Validate a bounded, JSON-native extension patch without coercion.
 
     The root mapping has depth zero. Each nested mapping or list increments the
     depth. Key count is cumulative across every mapping in the patch.
     """
 
-    if type(value) is not dict:
+    if require_object and type(value) is not dict:
         raise ValueError("patch must be a JSON object")
 
     key_count = 0
@@ -128,7 +130,15 @@ def validate_bounded_json_patch(value: Any) -> Any:
     return value
 
 
+def validate_bounded_json_patch(value: Any) -> Any:
+    """Validate a bounded JSON object used for shallow object merges."""
+
+    return validate_bounded_json_value(value, require_object=True)
+
+
 BoundedJsonPatch = Annotated[
     dict[str, JsonValue],
     BeforeValidator(validate_bounded_json_patch),
 ]
+
+BoundedJsonValue = Annotated[JsonValue, BeforeValidator(validate_bounded_json_value)]

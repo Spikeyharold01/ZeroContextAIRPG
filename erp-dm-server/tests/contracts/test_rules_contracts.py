@@ -1,44 +1,36 @@
 from pydantic import ValidationError
 import pytest
 
-from contracts.rules import DiceRollRequest, RulesAdjudicationResult
+from contracts.rules import RulesAdjudicationResult
+from contracts.rules.dnd5e import Dnd5eDiceRollRequest
 
 
-def roll(**updates):
-    values = {"expression": "1d20", "modifier": 3, "reason": "Pick lock"}
-    values.update(updates)
-    return DiceRollRequest.model_validate(values)
-
-
-def test_unmodified_expression_and_separate_modifier():
-    assert roll().modifier == 3
+def test_universal_rules_use_registry_profile_and_generic_roll_envelope():
+    result = RulesAdjudicationResult(
+        rules_profile_id="campaign.custom-rules",
+        operation_class="mechanical_candidate",
+        requires_adjudication=True,
+        roll={
+            "roll_policy_id": "campaign.stress-roll",
+            "parameters": {"pool": 4, "risk": "high"},
+            "reason": "Resist panic",
+        },
+    )
+    assert result.roll.parameters["pool"] == 4
     with pytest.raises(ValidationError):
-        roll(expression="1d20+3")
+        RulesAdjudicationResult(
+            rules_profile_id="campaign.custom-rules",
+            operation_class="non_mechanical",
+            requires_adjudication=False,
+            roll=result.roll,
+        )
 
 
-@pytest.mark.parametrize("updates", [
-    {"expression": "1d7"},
-    {"expression": "101d6"},
-    {"expression": "2d20", "advantage": "advantage"},
-])
-def test_unsupported_dice_are_rejected(updates):
+def test_dnd_dice_policy_is_adapter_owned():
+    assert Dnd5eDiceRollRequest(expression="1d20", modifier=3, reason="Check")
     with pytest.raises(ValidationError):
-        roll(**updates)
-
-
-def test_requires_roll_agrees_with_roll_presence_and_intent():
-    valid = RulesAdjudicationResult.model_validate({
-        "intent": "skill_check", "rules_system": "dnd_5e",
-        "requires_roll": True, "roll": roll(),
-    })
-    assert valid.roll is not None
+        Dnd5eDiceRollRequest(expression="1d20+3", reason="Check")
     with pytest.raises(ValidationError):
-        RulesAdjudicationResult.model_validate({
-            "intent": "skill_check", "rules_system": "dnd_5e",
-            "requires_roll": True, "roll": None,
-        })
+        Dnd5eDiceRollRequest(expression="1d7", reason="Check")
     with pytest.raises(ValidationError):
-        RulesAdjudicationResult.model_validate({
-            "intent": "narrative", "rules_system": "dnd_5e",
-            "requires_roll": True, "roll": roll(),
-        })
+        Dnd5eDiceRollRequest(expression="2d20", advantage="advantage", reason="Check")
