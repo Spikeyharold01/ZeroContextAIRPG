@@ -128,7 +128,7 @@ def test_canonical_version_1_baseline_checksum_and_migration(tmp_path):
     assert manager.get_character(41)["name"] == "V1 Hero"
     assert manager.get_character(41)["status"] == "active"
     assert manager.get_character(41)["is_active"] == 1
-    assert version_of(db_file) == 6
+    assert version_of(db_file) == 7
     assert_current_parity(db_file)
     assert Path(f"{db_file}.pre-v6.bak").is_file()
 
@@ -149,7 +149,7 @@ def test_sparse_legacy_fixture_reconciles_with_data_preserved(tmp_path):
     assert manager.get_active_facts(12)[0]["fact_type"] == "world_fact"
     assert manager.get_active_facts(12)[0]["game_day"] == 1
     assert manager.get_dnd_stats(12) is None
-    assert version_of(db_file) == 6
+    assert version_of(db_file) == 7
     assert_current_parity(db_file)
 
 
@@ -285,7 +285,7 @@ def test_partially_migrated_versions_reconcile(version, tmp_path):
 
     assert manager.get_character(1)["name"] == f"Version {version}"
     assert manager.get_game_state()["current_turn"] == 17
-    assert version_of(db_file) == 6
+    assert version_of(db_file) == 7
     assert_current_parity(db_file)
 
 
@@ -445,7 +445,7 @@ def test_reopening_and_reinitializing_version_6_is_idempotent(tmp_path):
 
     assert schema_manifest_for(db_file) == before_manifest
     assert DatabaseManager(str(db_file)).get_character(12)["current_goal"] == "Do not change"
-    assert version_of(db_file) == 6
+    assert version_of(db_file) == 7
     # SQLite may update file-level change counters, so compare logical data/schema.
     assert db_file.read_bytes() == before
 

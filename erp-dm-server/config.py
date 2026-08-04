@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -105,6 +106,68 @@ class DatabaseConfig:
         description="SQLite database used to store memories.",
         group="Database",
     )
+    campaign_id: Optional[str] = setting(
+        None,
+        label="Campaign ID",
+        description="Stable UUID copied from the campaign database after first initialization.",
+        group="Database",
+    )
+    archive_path: str = setting(
+        "archives",
+        label="Archive Directory",
+        description="Campaign-relative directory reserved for future verified archives.",
+        group="Database",
+    )
+
+
+@dataclass
+class StatePatchLimitsConfig:
+    max_bytes: int = 32 * 1024
+    max_operations: int = 100
+    max_value_depth: int = 5
+    max_total_keys: int = 100
+    max_key_length: int = 128
+    max_array_elements_per_operation: int = 1000
+    max_apply_milliseconds: Optional[int] = 2000
+
+
+@dataclass
+class StateDocumentLimitsConfig:
+    warning_bytes: int = 256 * 1024
+    safety_ceiling_bytes: int = 4 * 1024 * 1024
+    max_depth: int = 32
+    max_total_keys: int = 10000
+    max_array_elements: int = 10000
+    warning_fraction: float = 0.80
+    threshold_action: str = "warn"
+
+
+@dataclass
+class StateSQLiteConfig:
+    busy_timeout_ms: int = 5000
+    retry_count: int = 3
+    retry_backoff_ms: int = 50
+
+
+@dataclass
+class StateGrowthConfig:
+    total_campaign_bytes_limit: Optional[int] = None
+    max_turns: Optional[int] = None
+    max_scenes: Optional[int] = None
+    max_entities: Optional[int] = None
+    max_facts: Optional[int] = None
+    max_events: Optional[int] = None
+    max_documents: Optional[int] = None
+    max_audit_records: Optional[int] = None
+    max_campaign_age_days: Optional[int] = None
+
+
+@dataclass
+class StatePersistenceConfig:
+    patch: StatePatchLimitsConfig = field(default_factory=StatePatchLimitsConfig)
+    document: StateDocumentLimitsConfig = field(default_factory=StateDocumentLimitsConfig)
+    sqlite: StateSQLiteConfig = field(default_factory=StateSQLiteConfig)
+    growth: StateGrowthConfig = field(default_factory=StateGrowthConfig)
 
 
 @dataclass
@@ -291,6 +354,7 @@ class EngineConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     parser: ParserConfig = field(default_factory=ParserConfig)
     rules_engine: RulesEngineConfig = field(default_factory=RulesEngineConfig)
+    state_persistence: StatePersistenceConfig = field(default_factory=StatePersistenceConfig)
     markers: MarkerConfig = field(default_factory=MarkerConfig)  # NEW
 
     embedding_model: ModelConfig = field(
@@ -322,6 +386,7 @@ class EngineConfig:
 ENVIRONMENT_MAP = {
     # --- Database ---
     "DB_PATH": ("db", "path"),
+    "CAMPAIGN_ID": ("db", "campaign_id"),
 
     # --- Memory Thresholds ---
     "SIMILARITY_THRESHOLD": ("memory", "similarity"),
@@ -377,7 +442,7 @@ def _dataclass_to_dict(obj):
         value = getattr(obj, f.name)
         if is_dataclass(value):
             result[f.name] = _dataclass_to_dict(value)
-        else:
+        elif value is not None:
             result[f.name] = value
 
     return result
@@ -427,27 +492,45 @@ def _validate(instance):
             setattr(instance, f.name, choices[0])
 
 
-def _load_from_file(instance):
-    if not CONFIG_FILE.exists():
+def _load_from_file(instance, config_path: Path = CONFIG_FILE, *, required: bool = False):
+    if not config_path.exists():
+        if required:
+            raise FileNotFoundError(f"campaign configuration does not exist: {config_path}")
         return
     try:
-        with open(CONFIG_FILE, "rb") as f:
+        with open(config_path, "rb") as f:
             data = tomllib.load(f)
         _update_dataclass(instance, data)
     except Exception as e:
-        logger.error("Failed to load config file: %s", e)
+        raise RuntimeError(f"failed to load configuration {config_path}: {e}") from e
 
 
-def _save_to_file(instance):
+def _save_to_file(instance, config_path: Path = CONFIG_FILE):
     if tomli_w is None:
-        logger.warning("tomli-w not installed. Cannot save config to %s", CONFIG_FILE)
-        return
+        raise RuntimeError("tomli-w is required to save configuration")
+    config_path = config_path.resolve()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
     try:
         data = _dataclass_to_dict(instance)
-        with open(CONFIG_FILE, "wb") as f:
-            tomli_w.dump(data, f)
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=config_path.parent, prefix=f".{config_path.name}.",
+            suffix=".tmp", delete=False
+        ) as config_file:
+            temporary_path = Path(config_file.name)
+            tomli_w.dump(data, config_file)
+            config_file.flush()
+            os.fsync(config_file.fileno())
+        os.replace(temporary_path, config_path)
+        directory_fd = os.open(config_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     except Exception as e:
-        logger.error("Failed to save config file: %s", e)
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise RuntimeError(f"failed to save configuration {config_path}: {e}") from e
 
 
 def _apply_environment_overrides(instance):
@@ -508,19 +591,29 @@ def _log_summary(config):
 # Initialization Methods
 # ==========================================================
 
-def engine_load(cls):
+def engine_load(
+    cls, config_path: str | Path | None = None, *, required: bool = False,
+    apply_environment: bool = True
+):
     config = cls()
-    _load_from_file(config)
-    _apply_environment_overrides(config)
+    selected_path = Path(config_path) if config_path is not None else CONFIG_FILE
+    _load_from_file(config, selected_path, required=required)
+    if apply_environment:
+        _apply_environment_overrides(config)
     _validate(config)
 
     _log_summary(config)
     return config
 
 
-def engine_save(self):
+def engine_save(self, config_path: str | Path | None = None):
     _validate(self)
-    _save_to_file(self)
+    selected_path = Path(config_path) if config_path is not None else CONFIG_FILE
+    _save_to_file(self, selected_path)
+    reloaded = EngineConfig.load(selected_path, required=True, apply_environment=False)
+    if _dataclass_to_dict(reloaded) != _dataclass_to_dict(self):
+        raise RuntimeError(f"configuration verification failed after saving {selected_path}")
+    return selected_path.resolve()
 
 
 EngineConfig.load = classmethod(engine_load)
