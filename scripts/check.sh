@@ -16,7 +16,9 @@ for path in sorted(source_root.rglob("*.py")):
 PY
 
 python -m pytest -q erp-dm-server
-git diff --check
+# Exclude only the immutable historical schema snapshot; all normal source
+# files remain covered by the whitespace check.
+git diff --check -- . ':(exclude)erp-dm-server/database/baselines/001_schema.sql'
 
 status="$(git status --short)"
 if [[ -n "$status" ]]; then
