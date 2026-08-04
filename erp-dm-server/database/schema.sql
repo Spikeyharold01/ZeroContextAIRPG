@@ -1,5 +1,5 @@
 -- ============================================================
--- ADAPTIVE RPG/ERP ENGINE – DATABASE SCHEMA VERSION 6
+-- ADAPTIVE RPG/ERP ENGINE – DATABASE SCHEMA VERSION 7
 -- ============================================================
 
 CREATE TABLE schema_version (
@@ -330,3 +330,125 @@ CREATE INDEX idx_relationships_characters ON relationships(character_a_id, chara
 CREATE INDEX idx_inventory_character ON inventory(character_id);
 CREATE INDEX idx_working_memory_character ON working_memory(character_id);
 CREATE INDEX idx_scene_graph_location ON scene_graph(location_id);
+
+-- ============================================================
+-- 17. GENERIC STATE PERSISTENCE (ADDITIVE; LEGACY REMAINS AUTHORITATIVE)
+-- One database file contains exactly one non-deleted campaign.
+-- ============================================================
+CREATE TABLE campaigns (
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    lifecycle_status TEXT NOT NULL DEFAULT 'active'
+        CHECK (lifecycle_status IN ('active', 'deleted')),
+    rules_profile_id TEXT,
+    active_scene_id TEXT,
+    current_turn INTEGER NOT NULL DEFAULT 0 CHECK (current_turn >= 0),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TEXT,
+    CHECK ((lifecycle_status = 'deleted' AND deleted_at IS NOT NULL)
+        OR (lifecycle_status = 'active' AND deleted_at IS NULL))
+);
+
+CREATE UNIQUE INDEX idx_campaigns_one_live
+    ON campaigns((1)) WHERE lifecycle_status != 'deleted';
+
+CREATE TABLE state_documents (
+    id TEXT PRIMARY KEY,
+    campaign_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    subject_type TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    state_json TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    lifecycle_status TEXT NOT NULL DEFAULT 'active'
+        CHECK (lifecycle_status IN ('active', 'deleted')),
+    content_hash TEXT NOT NULL,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TEXT,
+    FOREIGN KEY (campaign_id) REFERENCES campaigns(id),
+    UNIQUE (campaign_id, namespace, subject_type, subject_id),
+    CHECK ((lifecycle_status = 'deleted' AND deleted_at IS NOT NULL)
+        OR (lifecycle_status = 'active' AND deleted_at IS NULL))
+);
+
+CREATE INDEX idx_state_documents_subject
+    ON state_documents(campaign_id, subject_type, subject_id);
+CREATE INDEX idx_state_documents_namespace
+    ON state_documents(campaign_id, namespace, lifecycle_status, id);
+
+CREATE TABLE state_patch_log (
+    id TEXT PRIMARY KEY,
+    campaign_id TEXT NOT NULL,
+    state_document_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    request_id TEXT,
+    producer_type TEXT NOT NULL,
+    producer_id TEXT,
+    turn_number INTEGER,
+    base_revision INTEGER,
+    prior_revision INTEGER NOT NULL,
+    resulting_revision INTEGER NOT NULL,
+    patch_json TEXT NOT NULL,
+    patch_hash TEXT NOT NULL,
+    prior_content_hash TEXT NOT NULL,
+    result_content_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (campaign_id) REFERENCES campaigns(id),
+    FOREIGN KEY (state_document_id) REFERENCES state_documents(id),
+    UNIQUE (campaign_id, idempotency_key),
+    UNIQUE (state_document_id, resulting_revision),
+    CHECK (resulting_revision = prior_revision + 1)
+);
+
+CREATE INDEX idx_state_patch_document_revision
+    ON state_patch_log(state_document_id, resulting_revision);
+
+CREATE TABLE state_idempotency (
+    campaign_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    target_fingerprint TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    state_document_id TEXT NOT NULL,
+    resulting_revision INTEGER NOT NULL,
+    response_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (campaign_id, idempotency_key),
+    FOREIGN KEY (campaign_id) REFERENCES campaigns(id),
+    FOREIGN KEY (state_document_id) REFERENCES state_documents(id)
+);
+
+CREATE TABLE state_projection_definitions (
+    id TEXT PRIMARY KEY,
+    namespace TEXT NOT NULL,
+    subject_type TEXT NOT NULL,
+    path_json TEXT NOT NULL,
+    value_type TEXT NOT NULL
+        CHECK (value_type IN ('null', 'text', 'integer', 'real', 'boolean')),
+    definition_version INTEGER NOT NULL DEFAULT 1 CHECK (definition_version >= 1),
+    lifecycle_status TEXT NOT NULL DEFAULT 'active'
+        CHECK (lifecycle_status IN ('active', 'deleted')),
+    UNIQUE (namespace, subject_type, path_json, definition_version)
+);
+
+CREATE TABLE state_projection_values (
+    campaign_id TEXT NOT NULL,
+    state_document_id TEXT NOT NULL,
+    projection_id TEXT NOT NULL,
+    source_revision INTEGER NOT NULL,
+    value_type TEXT NOT NULL,
+    text_value TEXT,
+    integer_value INTEGER,
+    real_value REAL,
+    boolean_value INTEGER,
+    value_hash TEXT NOT NULL,
+    PRIMARY KEY (state_document_id, projection_id),
+    FOREIGN KEY (campaign_id) REFERENCES campaigns(id),
+    FOREIGN KEY (state_document_id) REFERENCES state_documents(id),
+    FOREIGN KEY (projection_id) REFERENCES state_projection_definitions(id)
+);
+
+CREATE INDEX idx_state_projection_lookup
+    ON state_projection_values(campaign_id, projection_id, value_type);

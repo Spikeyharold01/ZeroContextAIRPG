@@ -28,7 +28,9 @@ import array
 import importlib.util
 import math
 import sys
-from typing import Optional, Dict, List, Any, Sequence, Union
+from pathlib import Path
+from uuid import UUID
+from typing import Optional, Dict, List, Any, Callable, Sequence, Union
 import logging
 
 # Configure logging
@@ -92,7 +94,7 @@ class EmbeddingUtils:
 class DatabaseManager:
     """SQLite persistence manager with independently versioned schema migrations."""
 
-    LATEST_SCHEMA_VERSION = 6
+    LATEST_SCHEMA_VERSION = 7
     _MIGRATION_FAILURE_INJECTOR = None
     _MIGRATIONS = {
         2: ("game_state", "game_day", "002_add_game_day.sql"),
@@ -100,6 +102,7 @@ class DatabaseManager:
         4: ("characters", "status", "004_add_character_status.sql"),
         5: ("characters", "is_active", "005_add_character_is_active.sql"),
         6: (None, None, "006_reconcile_schema.py"),
+        7: (None, None, "007_generic_state_foundation.py"),
     }
 
     # ---------- WHITELISTS for dynamic update methods ----------
@@ -152,9 +155,18 @@ class DatabaseManager:
         }
     }
 
-    def __init__(self, db_path: str = "data/game.db"):
+    def __init__(self, db_path: str = "data/game.db", campaign_id: str | None = None):
         self.db_path = db_path
+        if campaign_id is not None:
+            try:
+                UUID(campaign_id)
+            except (TypeError, ValueError) as error:
+                raise ValueError("configured campaign ID is not a valid UUID") from error
+        self.configured_campaign_id = campaign_id
+        self._lifecycle_check: Callable[[], None] | None = None
         self._init_db()
+        self.campaign_id = self._validate_campaign_identity(campaign_id)
+        self.json1_available = self._detect_json1()
 
     def _init_db(self):
         """Create a fresh schema or migrate an existing campaign database."""
@@ -228,6 +240,12 @@ class DatabaseManager:
                 conn.execute("PRAGMA foreign_keys = OFF")
                 foreign_keys_temporarily_disabled = True
 
+            if current_version < 7 and controlled_migration is None:
+                # Version 6 normally creates this backup first. A canonical v6
+                # database reaches v7 directly and needs its own verified copy.
+                if self._database_has_user_data(conn):
+                    self._create_verified_backup("pre-v7")
+
             conn.execute("BEGIN IMMEDIATE")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS schema_version (
@@ -248,10 +266,24 @@ class DatabaseManager:
                     if controlled_migration is None:
                         controlled_migration = self._load_controlled_migration(version)
                     controlled_migration.reconcile(conn)
+                elif version == 7:
+                    migration = self._load_controlled_migration(version)
+                    schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
+                    with open(schema_path, "r", encoding="utf-8") as schema_file:
+                        migration.migrate(conn, schema_file.read(), self.configured_campaign_id)
                 elif self._table_exists(conn, table) and not self._column_exists(conn, table, column):
                     migration_path = os.path.join(migrations_dir, filename)
                     with open(migration_path, "r", encoding="utf-8") as migration_file:
                         conn.execute(migration_file.read())
+                if version == 7:
+                    foreign_key_failures = conn.execute("PRAGMA foreign_key_check").fetchall()
+                    if foreign_key_failures:
+                        raise RuntimeError(
+                            "v7 foreign_key_check failed: " + repr(foreign_key_failures)
+                        )
+                    integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+                    if integrity != "ok":
+                        raise RuntimeError(f"v7 integrity_check failed: {integrity}")
                 conn.execute(
                     "UPDATE schema_version SET version = ? WHERE id = 1",
                     (version,),
@@ -293,8 +325,75 @@ class DatabaseManager:
         spec.loader.exec_module(module)
         failure_injector = type(self)._MIGRATION_FAILURE_INJECTOR
         if failure_injector is not None:
-            module._after_table_rebuild = failure_injector
+            if version == 6:
+                module._after_table_rebuild = failure_injector
+            elif version == 7:
+                module._before_validation = lambda: failure_injector("generic_state_v7")
         return module
+
+    def _database_has_user_data(self, conn: sqlite3.Connection) -> bool:
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%' AND name != 'schema_version'"
+        ).fetchall()
+        return any(
+            conn.execute(f'SELECT 1 FROM "{row[0]}" LIMIT 1').fetchone()
+            for row in tables
+        )
+
+    def _create_verified_backup(self, suffix: str) -> Path | None:
+        if self.db_path == ":memory:" or not Path(self.db_path).is_file():
+            return None
+        backup_path = Path(f"{self.db_path}.{suffix}.bak")
+        source = sqlite3.connect(self.db_path)
+        destination = sqlite3.connect(backup_path)
+        try:
+            source.backup(destination)
+            if destination.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise RuntimeError(f"backup verification failed: {backup_path}")
+        finally:
+            destination.close()
+            source.close()
+        return backup_path
+
+    def _validate_campaign_identity(self, configured_id: str | None) -> str:
+        conn = self._get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT id FROM campaigns WHERE lifecycle_status != 'deleted'"
+            ).fetchall()
+        finally:
+            conn.close()
+        if len(rows) != 1:
+            raise RuntimeError(
+                "campaign database must contain exactly one non-deleted campaign row"
+            )
+        stored_id = rows[0]["id"]
+        try:
+            UUID(stored_id)
+        except (TypeError, ValueError) as error:
+            raise RuntimeError("database campaign ID is not a valid UUID") from error
+        if configured_id is not None and configured_id != stored_id:
+            raise RuntimeError("configured campaign ID does not match database campaign ID")
+        return stored_id
+
+    def campaign_configuration_value(self) -> str:
+        """Return the stable UUID to persist in this campaign's configuration."""
+        return self.campaign_id
+
+    def bind_lifecycle(self, lifecycle_check: Callable[[], None]) -> None:
+        """Bind this manager to its owning campaign session's lifetime."""
+        self._lifecycle_check = lifecycle_check
+
+    def _detect_json1(self) -> bool:
+        conn = self._get_connection()
+        try:
+            try:
+                return conn.execute("SELECT json_valid('{}')").fetchone()[0] == 1
+            except sqlite3.OperationalError:
+                return False
+        finally:
+            conn.close()
 
     @staticmethod
     def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -311,6 +410,8 @@ class DatabaseManager:
 
     def _get_connection(self) -> sqlite3.Connection:
         """Return a row-based connection with foreign-key enforcement enabled."""
+        if self._lifecycle_check is not None:
+            self._lifecycle_check()
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")

@@ -7,7 +7,7 @@ This document describes the target OpenAI-compatible proxy architecture and reco
 The project uses three independent version numbers:
 
 - Product or architecture version: v6.0. This versions the overall engine design described by this document. It is not a database or API compatibility number.
-- Database schema version: 6. This is stored in SQLite's schema_version table and is managed by DatabaseManager migrations.
+- Database schema version: 7. This is stored in SQLite's schema_version table and is managed by DatabaseManager migrations.
 - API version: v1. This is the planned HTTP namespace in routes such as /v1/chat/completions. It does not imply that the endpoint is implemented yet.
 
 1.2 Implementation status
@@ -17,7 +17,59 @@ Implemented foundations:
 - typed configuration and the NiceGUI configuration editor;
 - OpenAI-format message ingestion and marker extraction;
 - D&D character-sheet parsing;
-- SQLite schema version 6, reconciliation migrations, state access, and tests.
+- SQLite schema version 7, reconciliation migrations, generic state access, and tests.
+
+1.3 Generic state persistence foundation (Stage 1.5B)
+
+One SQLite database file represents exactly one campaign. Its stable UUID is
+stored in the single non-deleted `campaigns` row and should be copied into that
+campaign's selected `engine.toml`. Production campaign lifecycle code must use
+`create_campaign`, `open_campaign`, `repair_campaign`, or the explicit
+`repair_missing_configuration` workflow
+from `campaign.py`; callers must not construct a manager from a bare database
+path. These workflows resolve database and archive paths relative to the selected
+configuration directory, atomically save and reload configuration, and require
+the configuration and database UUIDs to match. Campaign databases are never
+attached, merged, or active together.
+
+Opening an existing campaign requires an explicitly selected configuration.
+Missing configuration or a missing/mismatched version-7 identity is an incomplete
+package error, not permission to use defaults. A legacy version-6 package is
+backed up and migrated, then its persisted identity is written to and verified
+from the selected configuration. If configuration synchronization fails, the
+migrated database and backup remain recoverable and retry reuses the database ID.
+If `engine.toml` is completely missing, `repair_missing_configuration` requires
+both the intended existing database path and replacement configuration destination,
+validates the version-7 database read-only, writes rules-off defaults unless
+approved base settings are supplied, and then reopens through normal validation.
+
+An ordinary application runtime treats only one `CampaignSession` as active.
+Repositories must be created with `session.create_state_repository(...)`; calling
+`session.close()` idempotently invalidates those repositories and releases the
+session's manager reference. Sequential campaign changes close the old session,
+discard its derived objects, and explicitly open the next package (the minimal
+`change_campaign` helper performs those two steps). Full live hot-switch request,
+model, prompt-cache, and background-job orchestration is deferred until a
+long-running application runtime exists. Module-level `config.settings` remains
+application defaults only and is never the authority for an opened campaign.
+
+`state_documents` is authoritative only for writes made through the new generic
+state repository. Legacy world, plot, scene, character, fact, memory, event, and
+rules tables remain compatibility-readable and have not undergone an authority
+cutover or automatic dual write. Future legacy extraction is a separate stage.
+
+Rules profiles are optional. A campaign may keep `rules_profile_id` null and use
+generic campaign, plot, scene, and entity documents, facts, events, turns, and
+memory without creating mechanical, D&D, or combat rows.
+
+Campaign duration and total database, document-count, turn, entity, fact, event,
+and audit growth have no product limit. Configurable `state_persistence` patch
+and individual-document thresholds are operational memory/SQLite safeguards,
+not storytelling limits. Large live state should be split by entity, scene,
+location, plot thread, time period, subsystem, or user-defined subject; history
+belongs in append-only events, facts, audit records, summaries, knowledge chunks,
+and future verified archives. Archive pruning and legacy authority cutover are
+not implemented in Stage 1.5B.
 
 Planned runtime components:
 

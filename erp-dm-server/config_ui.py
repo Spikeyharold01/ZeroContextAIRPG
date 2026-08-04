@@ -278,12 +278,17 @@ def save_configuration():
             obj,
         )
 
-    settings.save()
+    try:
+        settings.save()
+    except Exception as error:
+        ui.notify(
+            f"Configuration was not saved: {error}",
+            color="negative",
+        )
+        return False
 
-    ui.notify(
-        "Configuration saved.",
-        color="positive",
-    )
+    ui.notify("Configuration saved and verified.", color="positive")
+    return True
 
 
 def reload_configuration():

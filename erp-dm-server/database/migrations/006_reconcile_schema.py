@@ -11,7 +11,7 @@ from database_schema_manifest_v6 import (
     REQUIRED_SQL_FRAGMENTS,
     SchemaManifest,
     inspect_schema,
-    load_current_manifest,
+    load_current_manifest as load_latest_manifest,
     normalize_sql,
     quote_identifier,
     schema_differences,
@@ -19,6 +19,24 @@ from database_schema_manifest_v6 import (
 
 
 MIGRATION_VERSION = 6
+VERSION_7_TABLES = frozenset({
+    "campaigns",
+    "state_documents",
+    "state_patch_log",
+    "state_idempotency",
+    "state_projection_definitions",
+    "state_projection_values",
+})
+
+
+def load_current_manifest() -> SchemaManifest:
+    """Return the historical v6 contract, excluding additive v7 objects."""
+    latest = load_latest_manifest()
+    return SchemaManifest(tuple(table for table in latest.tables if table.name not in VERSION_7_TABLES))
+
+
+def _without_v7(manifest: SchemaManifest) -> SchemaManifest:
+    return SchemaManifest(tuple(table for table in manifest.tables if table.name not in VERSION_7_TABLES))
 SAFE_ADDITIVE_COLUMNS = {
     ("characters", "prose_fingerprint"),
     ("characters", "status"),
@@ -90,7 +108,7 @@ def _create_sql_for_name(table: str, replacement: str) -> str:
 def _unknown_schema_elements(conn: sqlite3.Connection, expected: SchemaManifest) -> list[str]:
     expected_tables = expected.by_name()
     problems = []
-    for table in sorted(_table_names(conn) - expected_tables.keys()):
+    for table in sorted(_table_names(conn) - expected_tables.keys() - VERSION_7_TABLES):
         problems.append(f"unknown table {table}")
     for table in sorted(_table_names(conn) & expected_tables.keys()):
         expected_columns = {column.name for column in expected_tables[table].columns}
@@ -325,12 +343,15 @@ def _create_indexes(conn: sqlite3.Connection, expected: SchemaManifest) -> None:
     try:
         canonical.executescript(CURRENT_SCHEMA_PATH.read_text(encoding="utf-8"))
         index_sql = canonical.execute(
-            "SELECT name, sql FROM sqlite_master "
+            "SELECT name, sql, tbl_name FROM sqlite_master "
             "WHERE type = 'index' AND sql IS NOT NULL ORDER BY name"
         ).fetchall()
     finally:
         canonical.close()
-    for name, sql in index_sql:
+    expected_tables = expected.by_name()
+    for name, sql, table_name in index_sql:
+        if table_name not in expected_tables:
+            continue
         existing = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?",
             (name,),
@@ -413,7 +434,7 @@ def reconcile(conn: sqlite3.Connection) -> None:
     expected = load_current_manifest()
     validate_source_database(conn, expected)
 
-    actual_by_name = inspect_schema(conn).by_name()
+    actual_by_name = _without_v7(inspect_schema(conn)).by_name()
     expected_by_name = expected.by_name()
     for table in expected.tables:
         if table.name == "schema_version":
@@ -435,7 +456,7 @@ def reconcile(conn: sqlite3.Connection) -> None:
     _create_indexes(conn, expected)
 
     differences = schema_differences(
-        inspect_schema(conn), expected, REQUIRED_SQL_FRAGMENTS
+        _without_v7(inspect_schema(conn)), expected, REQUIRED_SQL_FRAGMENTS
     )
     if differences:
         raise ReconciliationError(

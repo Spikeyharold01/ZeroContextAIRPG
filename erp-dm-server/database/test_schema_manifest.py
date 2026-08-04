@@ -75,6 +75,12 @@ def test_version_1_difference_from_current_is_explicit():
     differences = schema_differences(baseline, current, REQUIRED_SQL_FRAGMENTS)
 
     assert differences == [
+        "missing table campaigns",
         "missing table schema_version",
+        "missing table state_documents",
+        "missing table state_idempotency",
+        "missing table state_patch_log",
+        "missing table state_projection_definitions",
+        "missing table state_projection_values",
         "column contract mismatch for characters",
     ]
