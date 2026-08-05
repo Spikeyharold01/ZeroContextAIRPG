@@ -391,7 +391,7 @@ class DatabaseManager:
         The caller preserves the original extraction exception as primary if
         this best-effort sidecar write fails.
         """
-        if self.db_path == ":memory":
+        if self.db_path == ":memory:":
             return None
         from datetime import datetime, timezone
         from uuid import uuid4

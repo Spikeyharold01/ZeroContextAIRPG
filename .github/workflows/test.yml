@@ -16,5 +16,7 @@ jobs:
           cache-dependency-path: erp-dm-server/requirements-dev.txt
       - name: Install development requirements
         run: python -m pip install -r erp-dm-server/requirements-dev.txt
+      - name: Verify json-repair installation
+        run: python -c "import importlib.metadata as m; print(m.version('json-repair'))"
       - name: Run acceptance checks
         run: ./scripts/check.sh
