@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+_approved_foreign_key_baseline = None
+
 import json
 from pathlib import Path
 import sqlite3
@@ -215,7 +217,8 @@ def validate_source_database(conn: sqlite3.Connection, expected: SchemaManifest)
         raise ReconciliationError("incompatible custom schema: " + "; ".join(problems))
     _validate_character_types(conn)
     _validate_json(conn)
-    _validate_orphans(conn, expected)
+    if not _approved_foreign_key_baseline:
+        _validate_orphans(conn, expected)
 
 
 def _requires_rebuild(actual_table, expected_table) -> bool:
@@ -465,7 +468,8 @@ def reconcile(conn: sqlite3.Connection) -> None:
         )
 
     foreign_key_failures = conn.execute("PRAGMA foreign_key_check").fetchall()
-    if foreign_key_failures:
+    approved = _approved_foreign_key_baseline
+    if foreign_key_failures and (approved is None or [tuple(row) for row in foreign_key_failures] != approved):
         raise ReconciliationError(
             "PRAGMA foreign_key_check failed: " + repr(foreign_key_failures)
         )

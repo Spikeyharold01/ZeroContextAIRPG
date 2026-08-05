@@ -76,6 +76,9 @@ def test_version_1_difference_from_current_is_explicit():
 
     assert differences == [
         "missing table campaigns",
+        "missing table legacy_extraction_items",
+        "missing table legacy_extraction_quarantine",
+        "missing table legacy_extraction_runs",
         "missing table schema_version",
         "missing table state_documents",
         "missing table state_idempotency",
