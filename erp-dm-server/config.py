@@ -171,6 +171,47 @@ class StatePersistenceConfig:
 
 
 @dataclass
+class StructuredOutputRecoveryConfig:
+    enabled: bool = True
+    library: str = "json_repair"
+    max_input_bytes: int = 1024 * 1024
+    max_repair_input_bytes: int = 256 * 1024
+    max_attempts: int = 1
+    reject_duplicate_keys: bool = True
+    reject_multiple_objects: bool = True
+    allow_markdown_fence_extraction: bool = True
+    max_nesting_depth: int = 32
+    max_object_keys: int = 10000
+    max_array_elements: int = 10000
+    repair_time_warning_ms: int | None = 250
+    max_error_summary_characters: int = 500
+    secure_debug_raw_output: bool = False
+    fail_closed_for_authoritative_state: bool = True
+
+    def __post_init__(self):
+        if self.library != "json_repair":
+            raise ValueError("structured-output recovery supports only json_repair")
+        if type(self.max_attempts) is not int or self.max_attempts != 1:
+            raise ValueError("structured-output recovery permits exactly one repair attempt")
+        positive = (
+            self.max_input_bytes, self.max_repair_input_bytes, self.max_nesting_depth,
+            self.max_object_keys, self.max_array_elements, self.max_error_summary_characters,
+        )
+        if any(type(value) is not int or value <= 0 for value in positive):
+            raise ValueError("structured-output recovery limits must be positive integers")
+        if self.max_repair_input_bytes > self.max_input_bytes:
+            raise ValueError("max_repair_input_bytes cannot exceed max_input_bytes")
+        if self.repair_time_warning_ms is not None and self.repair_time_warning_ms <= 0:
+            raise ValueError("repair_time_warning_ms must be positive when configured")
+        if self.max_error_summary_characters < 32:
+            raise ValueError("max_error_summary_characters must be at least 32")
+        if not self.reject_duplicate_keys or not self.reject_multiple_objects:
+            raise ValueError("duplicate keys and multiple JSON values must be rejected")
+        if not self.fail_closed_for_authoritative_state:
+            raise ValueError("authoritative structured state must fail closed")
+
+
+@dataclass
 class MemoryConfig:
     similarity: float = setting(
         0.85,
@@ -355,6 +396,9 @@ class EngineConfig:
     parser: ParserConfig = field(default_factory=ParserConfig)
     rules_engine: RulesEngineConfig = field(default_factory=RulesEngineConfig)
     state_persistence: StatePersistenceConfig = field(default_factory=StatePersistenceConfig)
+    structured_output_recovery: StructuredOutputRecoveryConfig = field(
+        default_factory=StructuredOutputRecoveryConfig
+    )
     markers: MarkerConfig = field(default_factory=MarkerConfig)  # NEW
 
     embedding_model: ModelConfig = field(
@@ -490,6 +534,9 @@ def _validate(instance):
         if choices is not None and value not in choices:
             logger.warning("%s is not a valid option. Resetting to %s", f.name, choices[0])
             setattr(instance, f.name, choices[0])
+
+    if isinstance(instance, StructuredOutputRecoveryConfig):
+        instance.__post_init__()
 
 
 def _load_from_file(instance, config_path: Path = CONFIG_FILE, *, required: bool = False):

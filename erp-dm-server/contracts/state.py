@@ -58,7 +58,12 @@ class StateTarget(InternalStrictModel):
 
     @model_validator(mode="after")
     def reject_reserved_namespace(self):
-        if self.namespace in RESERVED_NAMESPACES or self.namespace.startswith("engine.internal."):
+        if (
+            self.namespace in RESERVED_NAMESPACES
+            or self.namespace.startswith("engine.internal.")
+            or self.namespace.startswith("legacy.")
+            or (self.namespace.startswith("rules.") and ".legacy-" in self.namespace)
+        ):
             raise ValueError("namespace is reserved for internal engine state")
         return self
 
