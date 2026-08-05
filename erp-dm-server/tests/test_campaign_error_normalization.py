@@ -73,7 +73,7 @@ def test_missing_config_repair_normalizes_integrity_failure(tmp_path, monkeypatc
     database = tmp_path / "campaign.db"
     database.touch()
     identity = campaign_module._DatabaseIdentity(
-        True, 7, str(uuid4()), live_campaign_count=1,
+        True, 8, str(uuid4()), live_campaign_count=1,
         integrity_status="integrity_check=failed; foreign_key_failures=0",
     )
     monkeypatch.setattr(campaign_module, "_inspect_database", lambda *_args, **_kwargs: identity)
@@ -157,4 +157,4 @@ def test_missing_database_and_invalid_schema_are_structured(tmp_path):
             database_path=invalid_schema,
             configuration_path=tmp_path / "old" / "engine.toml",
         )
-    assert "version-7" in schema.value.reason
+    assert "version-8" in schema.value.reason

@@ -2,3 +2,4 @@ nicegui
 tomli; python_version < "3.11"
 tomli-w>=1.0.0
 pydantic>=2.8,<3
+json-repair>=0.39,<0.60

@@ -37,6 +37,7 @@ def make_version_6_database(db_path):
     conn = manager._get_connection()
     for table in (
         "state_projection_values", "state_projection_definitions", "state_idempotency",
+        "legacy_extraction_quarantine", "legacy_extraction_items", "legacy_extraction_runs",
         "state_patch_log", "state_documents", "campaigns",
     ):
         conn.execute(f"DROP TABLE {table}")
@@ -75,7 +76,7 @@ def test_v7_campaign_is_stable_and_configuration_mismatch_is_rejected(tmp_path):
     with pytest.raises(RuntimeError, match="does not match"):
         DatabaseManager(str(db_path), campaign_id=str(uuid4()))
     conn = second._get_connection()
-    assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 7
+    assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 8
     assert conn.execute(
         "SELECT COUNT(*) FROM campaigns WHERE lifecycle_status != 'deleted'"
     ).fetchone()[0] == 1

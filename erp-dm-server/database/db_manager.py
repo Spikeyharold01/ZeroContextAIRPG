@@ -94,7 +94,7 @@ class EmbeddingUtils:
 class DatabaseManager:
     """SQLite persistence manager with independently versioned schema migrations."""
 
-    LATEST_SCHEMA_VERSION = 7
+    LATEST_SCHEMA_VERSION = 8
     _MIGRATION_FAILURE_INJECTOR = None
     _MIGRATIONS = {
         2: ("game_state", "game_day", "002_add_game_day.sql"),
@@ -103,6 +103,7 @@ class DatabaseManager:
         5: ("characters", "is_active", "005_add_character_is_active.sql"),
         6: (None, None, "006_reconcile_schema.py"),
         7: (None, None, "007_generic_state_foundation.py"),
+        8: (None, None, "008_legacy_state_extraction.py"),
     }
 
     # ---------- WHITELISTS for dynamic update methods ----------
@@ -216,6 +217,8 @@ class DatabaseManager:
                     f"supported version {self.LATEST_SCHEMA_VERSION}"
                 )
 
+            approved_foreign_key_baseline = [tuple(row) for row in conn.execute("PRAGMA foreign_key_check").fetchall()]
+
             migrations_dir = os.path.join(os.path.dirname(__file__), "migrations")
             for version in range(current_version + 1, self.LATEST_SCHEMA_VERSION + 1):
                 filename = self._MIGRATIONS[version][2]
@@ -226,6 +229,7 @@ class DatabaseManager:
             controlled_migration = None
             if current_version < 6:
                 controlled_migration = self._load_controlled_migration(6)
+                controlled_migration._approved_foreign_key_baseline = approved_foreign_key_baseline
                 expected = controlled_migration.load_current_manifest()
                 controlled_migration.validate_source_database(conn, expected)
                 if (
@@ -246,6 +250,9 @@ class DatabaseManager:
                 if self._database_has_user_data(conn):
                     self._create_verified_backup("pre-v7")
 
+            if current_version < 8 and self._database_has_user_data(conn):
+                self._create_verified_backup("pre-v8")
+
             conn.execute("BEGIN IMMEDIATE")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS schema_version (
@@ -265,33 +272,48 @@ class DatabaseManager:
                 if version == 6:
                     if controlled_migration is None:
                         controlled_migration = self._load_controlled_migration(version)
+                        controlled_migration._approved_foreign_key_baseline = approved_foreign_key_baseline
                     controlled_migration.reconcile(conn)
                 elif version == 7:
                     migration = self._load_controlled_migration(version)
                     schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
                     with open(schema_path, "r", encoding="utf-8") as schema_file:
                         migration.migrate(conn, schema_file.read(), self.configured_campaign_id)
+                elif version == 8:
+                    migration = self._load_controlled_migration(version)
+                    migration.migrate(conn, self.configured_campaign_id, foreign_keys_before=[{
+                        "table": row[0], "rowid": row[1], "parent": row[2], "fkid": row[3]
+                    } for row in approved_foreign_key_baseline])
                 elif self._table_exists(conn, table) and not self._column_exists(conn, table, column):
                     migration_path = os.path.join(migrations_dir, filename)
                     with open(migration_path, "r", encoding="utf-8") as migration_file:
                         conn.execute(migration_file.read())
                 if version == 7:
-                    foreign_key_failures = conn.execute("PRAGMA foreign_key_check").fetchall()
-                    if foreign_key_failures:
+                    foreign_key_failures = [tuple(row) for row in conn.execute("PRAGMA foreign_key_check").fetchall()]
+                    if foreign_key_failures != approved_foreign_key_baseline:
                         raise RuntimeError(
-                            "v7 foreign_key_check failed: " + repr(foreign_key_failures)
+                            f"v{version} foreign_key_check changed: before="
+                            + repr(approved_foreign_key_baseline) + " after=" + repr(foreign_key_failures)
                         )
                     integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
                     if integrity != "ok":
-                        raise RuntimeError(f"v7 integrity_check failed: {integrity}")
+                        raise RuntimeError(f"v{version} integrity_check failed: {integrity}")
                 conn.execute(
                     "UPDATE schema_version SET version = ? WHERE id = 1",
                     (version,),
                 )
 
             conn.commit()
-        except Exception:
+        except Exception as error:
             conn.rollback()
+            if type(error).__name__ == "ExtractionConflictError" and hasattr(error, "report"):
+                try:
+                    self._write_extraction_conflict_report(error.report)
+                except Exception as sidecar_error:
+                    try:
+                        error.add_note(f"conflict sidecar write failed: {type(sidecar_error).__name__}")
+                    except AttributeError:
+                        pass
             raise
         finally:
             if foreign_keys_temporarily_disabled:
@@ -329,7 +351,72 @@ class DatabaseManager:
                 module._after_table_rebuild = failure_injector
             elif version == 7:
                 module._before_validation = lambda: failure_injector("generic_state_v7")
+            elif version == 8:
+                module._failure_injector = failure_injector
         return module
+
+    def refresh_legacy_extraction(self) -> dict:
+        """Explicitly refresh extractor-owned compatibility documents.
+
+        This administrative operation is intentionally disconnected from all
+        legacy writes and from the ordinary StatePatch repository.
+        """
+        conn = self._get_connection()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            migration = self._load_controlled_migration(8)
+            report = migration.extract(conn, self.campaign_id)
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+            if integrity != "ok":
+                raise RuntimeError(f"v8 refresh integrity_check failed: {integrity}")
+            conn.commit()
+            return report
+        except Exception as error:
+            conn.rollback()
+            if type(error).__name__ == "ExtractionConflictError" and hasattr(error, "report"):
+                try:
+                    self._write_extraction_conflict_report(error.report)
+                except Exception as sidecar_error:
+                    try:
+                        error.add_note(f"conflict sidecar write failed: {type(sidecar_error).__name__}")
+                    except AttributeError:
+                        pass
+            raise
+        finally:
+            conn.close()
+
+    def _write_extraction_conflict_report(self, report: dict) -> Path | None:
+        """Durably record a safe conflict report after extraction rollback.
+
+        The caller preserves the original extraction exception as primary if
+        this best-effort sidecar write fails.
+        """
+        if self.db_path == ":memory":
+            return None
+        from datetime import datetime, timezone
+        from uuid import uuid4
+        db_path = Path(self.db_path)
+        directory = db_path.parent
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        destination = directory / f"{db_path.name}.v8-conflict.{stamp}.{uuid4().hex}.json"
+        temporary = destination.with_name(destination.name + ".tmp")
+        payload = dict(report)
+        payload.setdefault("recovery_guidance", "Inspect the conflicting extractor-owned document and restore it from backup; the extractor did not overwrite it.")
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8")
+        with open(temporary, "xb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+        try:
+            dir_fd = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            logger.debug("Directory fsync for extraction conflict report is unsupported", exc_info=True)
+        return destination
 
     def _database_has_user_data(self, conn: sqlite3.Connection) -> bool:
         tables = conn.execute(

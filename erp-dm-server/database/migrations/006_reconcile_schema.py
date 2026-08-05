@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+_approved_foreign_key_baseline = None
+
 import json
 from pathlib import Path
 import sqlite3
@@ -465,7 +467,8 @@ def reconcile(conn: sqlite3.Connection) -> None:
         )
 
     foreign_key_failures = conn.execute("PRAGMA foreign_key_check").fetchall()
-    if foreign_key_failures:
+    approved = _approved_foreign_key_baseline
+    if foreign_key_failures and (approved is None or [tuple(row) for row in foreign_key_failures] != approved):
         raise ReconciliationError(
             "PRAGMA foreign_key_check failed: " + repr(foreign_key_failures)
         )

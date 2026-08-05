@@ -1,5 +1,5 @@
 -- ============================================================
--- ADAPTIVE RPG/ERP ENGINE – DATABASE SCHEMA VERSION 7
+-- ADAPTIVE RPG/ERP ENGINE – DATABASE SCHEMA VERSION 8
 -- ============================================================
 
 CREATE TABLE schema_version (
@@ -452,3 +452,49 @@ CREATE TABLE state_projection_values (
 
 CREATE INDEX idx_state_projection_lookup
     ON state_projection_values(campaign_id, projection_id, value_type);
+
+-- 18. LOSSLESS LEGACY COMPATIBILITY EXTRACTION TRACKING
+CREATE TABLE legacy_extraction_runs (
+    id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL,
+    extraction_schema_version INTEGER NOT NULL, extractor_revision TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('running','complete','failed','parity_failed')),
+    source_schema_hash TEXT NOT NULL, started_at TEXT NOT NULL,
+    completed_at TEXT, source_row_count INTEGER, document_count INTEGER,
+    quarantine_count INTEGER, source_root_hash TEXT, document_root_hash TEXT,
+    legacy_before_hash TEXT, legacy_after_hash TEXT,
+    parity_status TEXT NOT NULL CHECK(parity_status IN ('pending','exact','failed')),
+    report_json TEXT, failure_json TEXT,
+    FOREIGN KEY(campaign_id) REFERENCES campaigns(id)
+);
+CREATE TABLE legacy_extraction_items (
+    id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL,
+    extraction_schema_version INTEGER NOT NULL, extractor_revision TEXT NOT NULL,
+    area TEXT NOT NULL, source_table TEXT NOT NULL,
+    source_identity_json TEXT NOT NULL, source_identity_hash TEXT NOT NULL,
+    source_columns_json TEXT NOT NULL, source_hash TEXT NOT NULL,
+    namespace TEXT NOT NULL, subject_type TEXT NOT NULL, subject_id TEXT NOT NULL,
+    state_document_id TEXT, document_content_hash TEXT,
+    parse_status TEXT NOT NULL, warning_json TEXT NOT NULL,
+    status TEXT NOT NULL, first_run_id TEXT NOT NULL, last_run_id TEXT NOT NULL,
+    extracted_at TEXT NOT NULL, verified_at TEXT NOT NULL,
+    FOREIGN KEY(campaign_id) REFERENCES campaigns(id),
+    FOREIGN KEY(state_document_id) REFERENCES state_documents(id),
+    FOREIGN KEY(first_run_id) REFERENCES legacy_extraction_runs(id),
+    FOREIGN KEY(last_run_id) REFERENCES legacy_extraction_runs(id),
+    UNIQUE(campaign_id,extraction_schema_version,area,source_table,source_identity_hash),
+    UNIQUE(campaign_id,namespace,subject_type,subject_id)
+);
+CREATE TABLE legacy_extraction_quarantine (
+    id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL, run_id TEXT NOT NULL,
+    extraction_item_id TEXT, source_table TEXT NOT NULL,
+    source_identity_json TEXT, source_column TEXT, reason_code TEXT NOT NULL,
+    severity TEXT NOT NULL, raw_storage_class TEXT, raw_value_blob BLOB,
+    declared_type TEXT, error_json TEXT NOT NULL, created_at TEXT NOT NULL,
+    FOREIGN KEY(campaign_id) REFERENCES campaigns(id),
+    FOREIGN KEY(run_id) REFERENCES legacy_extraction_runs(id),
+    FOREIGN KEY(extraction_item_id) REFERENCES legacy_extraction_items(id)
+);
+CREATE INDEX idx_legacy_extraction_runs_campaign ON legacy_extraction_runs(campaign_id,started_at);
+CREATE INDEX idx_legacy_extraction_items_source ON legacy_extraction_items(campaign_id,source_table,source_identity_hash);
+CREATE INDEX idx_legacy_extraction_items_status ON legacy_extraction_items(campaign_id,status);
+CREATE INDEX idx_legacy_extraction_quarantine_source ON legacy_extraction_quarantine(campaign_id,source_table,source_column);
