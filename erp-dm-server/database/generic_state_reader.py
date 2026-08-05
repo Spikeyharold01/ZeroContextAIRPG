@@ -12,6 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
+from uuid import uuid5
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
@@ -452,6 +453,25 @@ class GenericStateReader:
             require("extraction-item-count", False, "document must link to exactly one extraction item", 1, len(items))
             return IntegrityVerification(document_id=row["id"], findings=tuple(findings))
         item = items[0]
+        source_identity = None
+        try:
+            source_identity = json.loads(item["source_identity_json"])
+            expected_identity_hash = _domain_hash(_canonical_json(source_identity).encode())
+        except (json.JSONDecodeError, TypeError) as error:
+            require("source-identity-json-invalid", False, "source identity JSON cannot be decoded", "valid JSON", type(error).__name__)
+            expected_identity_hash = None
+        require("source-identity-hash-mismatch", expected_identity_hash is not None and item["source_identity_hash"] == expected_identity_hash,
+                "source identity hash differs from trusted canonical identity hash", item["source_identity_hash"], expected_identity_hash)
+        expected_item_id = str(uuid5(DETERMINISTIC_ID_NAMESPACE,
+            f"{item['campaign_id']}\0{EXTRACTION_SCHEMA_VERSION}\0{EXTRACTOR_REVISION}\0{item['area']}\0{item['source_table']}\0{item['source_identity_hash']}"))
+        expected_document_id = str(uuid5(DETERMINISTIC_ID_NAMESPACE, "document\0" + expected_item_id))
+        expected_subject_id = f"{item['source_table']}/{(source_identity or {}).get('kind')}/{item['source_identity_hash']}"
+        require("extraction-item-id-mismatch", item["id"] == expected_item_id,
+                "extraction item ID differs from trusted deterministic ID", expected_item_id, item["id"])
+        require("state-document-id-mismatch", row["id"] == expected_document_id,
+                "state document ID differs from trusted deterministic ID", expected_document_id, row["id"])
+        require("deterministic-subject-id-mismatch", row["subject_id"] == expected_subject_id and item["subject_id"] == expected_subject_id,
+                "subject ID differs from trusted deterministic source identity", expected_subject_id, f"document={row['subject_id']}; item={item['subject_id']}")
         require("item-schema-version-untrusted", item["extraction_schema_version"] == EXTRACTION_SCHEMA_VERSION,
                 "extraction item schema version differs from trusted schema", EXTRACTION_SCHEMA_VERSION, item["extraction_schema_version"])
         require("item-extractor-revision-untrusted", item["extractor_revision"] == EXTRACTOR_REVISION,
@@ -505,6 +525,14 @@ class GenericStateReader:
                                           (self.campaign_id, item["last_run_id"])).fetchone()[0]
             require("run-document-count-mismatch", run["document_count"] == document_count,
                     "run document count differs from extraction items", run["document_count"], document_count)
+            source_count = conn.execute("SELECT count(*) FROM legacy_extraction_items WHERE campaign_id=? AND last_run_id=?",
+                                        (self.campaign_id, item["last_run_id"])).fetchone()[0]
+            quarantine_count = conn.execute("SELECT count(*) FROM legacy_extraction_quarantine WHERE campaign_id=? AND run_id=?",
+                                            (self.campaign_id, item["last_run_id"])).fetchone()[0]
+            require("run-source-row-count-mismatch", run["source_row_count"] == source_count,
+                    "run source row count differs from extraction items", run["source_row_count"], source_count)
+            require("run-quarantine-count-mismatch", run["quarantine_count"] == quarantine_count,
+                    "run quarantine count differs from quarantine rows", run["quarantine_count"], quarantine_count)
         return IntegrityVerification(document_id=row["id"], findings=tuple(findings))
 
     def _area(self, namespace: str) -> tuple[CompatibilityDocument, ...]:

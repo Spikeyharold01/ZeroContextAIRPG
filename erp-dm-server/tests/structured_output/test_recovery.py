@@ -301,3 +301,32 @@ def test_invalid_engine_configuration_is_rejected_immediately(change):
     from config import StructuredOutputRecoveryConfig
     with pytest.raises(ValueError):
         StructuredOutputRecoveryConfig(**change)
+
+
+def test_malformed_over_depth_input_rejects_before_pydantic_or_repair(repair_spy):
+    class ExplodesOnValidation(BaseModel):
+        x: int
+
+        @model_validator(mode="before")
+        @classmethod
+        def explode(cls, value):
+            raise RuntimeError("pydantic must not run")
+
+    policy = StructuredOutputPolicy(max_nesting_depth=8)
+    for raw in ("{" * 9, "[" * 9, "{" + "[" * 8):
+        result = validate_structured_output(raw, ExplodesOnValidation, policy)
+        assert result.status == "input_rejected"
+    assert repair_spy == []
+
+
+def test_malformed_depth_boundary_and_excessive_members_before_repair(repair_spy):
+    boundary = StructuredOutputPolicy(max_nesting_depth=3)
+    boundary_result = validate_structured_output("{{{", Emotion, boundary)
+    assert boundary_result.status != "input_rejected"
+    calls_after_boundary = len(repair_spy)
+    assert validate_structured_output("{{{{", Emotion, boundary).status == "input_rejected"
+    too_many_keys = StructuredOutputPolicy(max_object_keys=2)
+    assert validate_structured_output('{"a": {"b": {"c": ', Emotion, too_many_keys).status == "input_rejected"
+    too_many_array_items = StructuredOutputPolicy(max_array_elements=2)
+    assert validate_structured_output("[1,2,3,", Emotion, too_many_array_items).status == "input_rejected"
+    assert len(repair_spy) == calls_after_boundary

@@ -153,6 +153,53 @@ def _scan_top_level_values(text: str) -> int:
     return count
 
 
+def _preparse_safety_check(text: str, policy: StructuredOutputPolicy) -> None:
+    """Reject deterministically observable unsafe malformed structures before repair."""
+    object_depth = array_depth = max_depth = 0
+    key_markers = array_markers = 0
+    in_string = escaped = False
+    quote = '"'
+    stack: list[str] = []
+    for character in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                in_string = False
+            continue
+        if character in {'"', "'"}:
+            in_string = True
+            quote = character
+            continue
+        if character == "{":
+            object_depth += 1
+            stack.append(character)
+        elif character == "[":
+            array_depth += 1
+            stack.append(character)
+        elif character == "}" and object_depth:
+            object_depth -= 1
+            if stack:
+                stack.pop()
+        elif character == "]" and array_depth:
+            array_depth -= 1
+            if stack:
+                stack.pop()
+        elif character == ":" and stack and stack[-1] == "{":
+            key_markers += 1
+            if key_markers > policy.max_object_keys:
+                raise ValueError("maximum plausible object key count exceeded")
+        elif character == "," and stack and stack[-1] == "[":
+            array_markers += 1
+            if array_markers > policy.max_array_elements:
+                raise ValueError("maximum plausible array element count exceeded")
+        max_depth = max(max_depth, object_depth + array_depth)
+        if max_depth > policy.max_nesting_depth:
+            raise ValueError("maximum structural nesting depth exceeded")
+
+
 def _has_multiple_values(text: str) -> bool:
     """Recognize multiple plausible top-level values before repair."""
     if _scan_top_level_values(text) > 1:
@@ -243,6 +290,10 @@ def validate_structured_output(
         return result("input_rejected", category="input", error=ValueError())
     if policy.reject_multiple_objects and _has_multiple_values(candidate):
         return result("input_rejected", category="input", error=ValueError())
+    try:
+        _preparse_safety_check(candidate, policy)
+    except ValueError as safety_error:
+        return result("input_rejected", category="input", error=safety_error)
     parsed = None
     try:
         parsed = _strict_load(candidate, reject_duplicates=policy.reject_duplicate_keys)

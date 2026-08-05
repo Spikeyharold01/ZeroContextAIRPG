@@ -22,3 +22,14 @@ It has no model or network runtime requirement and is therefore expected to suit
 Android/Python and constrained devices subject to the configured per-output byte,
 depth, key, array, and execution-time safeguards. The installed version must be
 recorded by release/CI checks because it is intentionally bounded rather than vendored.
+
+Malformed structures that deterministically exceed configured byte, nesting, key,
+or array safeguards may be rejected before Pydantic validation and before
+`json_repair`; the scanner does not repair or guess in order to measure unsafe
+input.
+
+Large legacy blob extraction is not full bounded-memory streaming in Stage 1.5C.
+The extractor uses chunked blob reads plus preflight materialization protection,
+including base64 expansion estimates, because compatibility documents currently
+store one exact base64 value. Full spool-backed streaming can be added later
+without changing compatibility authority.

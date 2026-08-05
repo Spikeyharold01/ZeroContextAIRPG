@@ -196,7 +196,7 @@ def _tables(conn):
 def _metadata_rows(conn, pragma, table):
     return [tuple(row) for row in conn.execute(f"PRAGMA {pragma}({_q(table)})")]
 
-def _row_order(columns, has_rowid, rowid_expression=None):
+def _row_order(columns, has_rowid, rowid_expression=None, conn=None, table=None, row=None):
     primary = [column for column in sorted(columns, key=lambda item: item["pk"]) if column["pk"]]
     if primary:
         terms = []
@@ -204,6 +204,17 @@ def _row_order(columns, has_rowid, rowid_expression=None):
             quoted = _q(column["name"])
             terms.extend((f"typeof({quoted}) COLLATE BINARY", f"CAST({quoted} AS BLOB) COLLATE BINARY"))
         return ",".join(terms)
+    if conn is not None and table is not None:
+        for index in conn.execute(f"PRAGMA index_list({_q(table)})"):
+            if index[2]:
+                names = [x[2] for x in conn.execute(f"PRAGMA index_info({_q(index[1])})") if x[2] is not None]
+                candidates = [c for c in columns if c["name"] in names]
+                if len(candidates) == len(names):
+                    terms = []
+                    for column in candidates:
+                        quoted = _q(column["name"])
+                        terms.extend((f"typeof({quoted}) COLLATE BINARY", f"CAST({quoted} AS BLOB) COLLATE BINARY"))
+                    return ",".join(terms)
     if has_rowid and rowid_expression:
         return rowid_expression
     raise RuntimeError("WITHOUT ROWID table has no declared primary key")
@@ -257,7 +268,7 @@ def _iter_rows(conn, table, columns, table_sql):
             f"AND {1 if rowid_expression else 0}=1 THEN NULL "
             f"ELSE {quoted} END",
         ))
-    order = _row_order(columns, has_rowid, rowid_expression)
+    order = _row_order(columns, has_rowid, rowid_expression, conn, table)
     cursor = conn.execute(f"SELECT {','.join(expressions)} FROM {_q(table)} ORDER BY {order}")
     for raw_row in cursor:
         rowid = raw_row[0]

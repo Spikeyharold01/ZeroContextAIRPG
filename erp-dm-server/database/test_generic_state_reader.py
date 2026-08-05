@@ -219,3 +219,70 @@ def test_coordinated_tampering_cannot_redefine_trusted_extractor_constants(tmp_p
     verification = reader.verify(document.document_id)
     assert not verification.valid
     assert {"trusted-owner-mismatch", "trusted-schema-version-mismatch", "trusted-extractor-revision-mismatch", "item-schema-version-untrusted", "run-schema-version-untrusted"} & set(verification.finding_codes)
+
+
+def test_integrity_recomputes_deterministic_item_document_subject_and_identity_hashes(tmp_path):
+    manager, reader = populated_campaign(tmp_path)
+    document = reader.world_state()[0]
+    conn = manager._get_connection()
+    item = conn.execute("SELECT * FROM legacy_extraction_items WHERE state_document_id=?", (document.document_id,)).fetchone()
+    run_id = item["last_run_id"]
+    conn.execute("UPDATE legacy_extraction_items SET id=? WHERE id=?", ("not-deterministic-item", item["id"]))
+    conn.commit(); conn.close()
+    findings = set(reader.verify(document.document_id).finding_codes)
+    assert "extraction-item-id-mismatch" in findings
+
+    manager, reader = populated_campaign(tmp_path / "doc")
+    document = reader.world_state()[0]
+    conn = manager._get_connection()
+    conn.execute("PRAGMA foreign_keys=OFF")
+    item = conn.execute("SELECT * FROM legacy_extraction_items WHERE state_document_id=?", (document.document_id,)).fetchone()
+    conn.execute("UPDATE state_documents SET id=? WHERE id=?", ("not-deterministic-document", document.document_id))
+    conn.execute("UPDATE legacy_extraction_items SET state_document_id=? WHERE id=?", ("not-deterministic-document", item["id"]))
+    conn.commit(); conn.close()
+    findings = set(reader.verify("not-deterministic-document").finding_codes)
+    assert "state-document-id-mismatch" in findings
+
+    manager, reader = populated_campaign(tmp_path / "subject")
+    document = reader.world_state()[0]
+    conn = manager._get_connection()
+    conn.execute("UPDATE state_documents SET subject_id='not-deterministic-subject' WHERE id=?", (document.document_id,))
+    conn.execute("UPDATE legacy_extraction_items SET subject_id='not-deterministic-subject' WHERE state_document_id=?", (document.document_id,))
+    conn.commit(); conn.close()
+    findings = set(reader.verify(document.document_id).finding_codes)
+    assert "deterministic-subject-id-mismatch" in findings
+
+    manager, reader = populated_campaign(tmp_path / "identity")
+    document = reader.world_state()[0]
+    conn = manager._get_connection()
+    conn.execute("UPDATE legacy_extraction_items SET source_identity_hash='wrong' WHERE state_document_id=?", (document.document_id,))
+    conn.commit(); conn.close()
+    findings = set(reader.verify(document.document_id).finding_codes)
+    assert "source-identity-hash-mismatch" in findings
+
+
+def test_run_level_integrity_reports_each_normalized_report_corruption(tmp_path):
+    corruptions = [
+        ("exact", "UPDATE legacy_extraction_runs SET report_json=json_set(report_json,'$.exact',json('false')) WHERE id=?", "run-report-exact-false"),
+        ("malformed", "UPDATE legacy_extraction_runs SET report_json='{' WHERE id=?", "run-report-invalid"),
+        ("source_root_report", "UPDATE legacy_extraction_runs SET report_json=json_set(report_json,'$.source_root_hash','wrong') WHERE id=?", "run-report-source-root-mismatch"),
+        ("document_root_report", "UPDATE legacy_extraction_runs SET report_json=json_set(report_json,'$.document_root_hash','wrong') WHERE id=?", "run-report-document-root-mismatch"),
+        ("root_column", "UPDATE legacy_extraction_runs SET document_root_hash='wrong' WHERE id=?", "run-root-parity-mismatch"),
+        ("source_count", "UPDATE legacy_extraction_runs SET source_row_count=999 WHERE id=?", "run-source-row-count-mismatch"),
+        ("document_count", "UPDATE legacy_extraction_runs SET document_count=999 WHERE id=?", "run-document-count-mismatch"),
+        ("quarantine_count", "UPDATE legacy_extraction_runs SET quarantine_count=999 WHERE id=?", "run-quarantine-count-mismatch"),
+        ("running", "UPDATE legacy_extraction_runs SET status='running' WHERE id=?", "run-incomplete"),
+        ("failed", "UPDATE legacy_extraction_runs SET status='failed' WHERE id=?", "run-incomplete"),
+        ("parity", "UPDATE legacy_extraction_runs SET parity_status='failed' WHERE id=?", "run-parity-not-exact"),
+        ("schema", "UPDATE legacy_extraction_runs SET extraction_schema_version=800 WHERE id=?", "run-schema-version-untrusted"),
+        ("extractor", "UPDATE legacy_extraction_runs SET extractor_revision='attacker.v1' WHERE id=?", "run-extractor-revision-untrusted"),
+    ]
+    for name, sql, code in corruptions:
+        manager, reader = populated_campaign(tmp_path / name)
+        document = reader.world_state()[0]
+        conn = manager._get_connection()
+        run_id = conn.execute("SELECT last_run_id FROM legacy_extraction_items WHERE state_document_id=?", (document.document_id,)).fetchone()[0]
+        conn.execute(sql, (run_id,)); conn.commit(); conn.close()
+        assert code in reader.verify(document.document_id).finding_codes
+    manager, reader = populated_campaign(tmp_path / "valid-run")
+    assert reader.verify(reader.world_state()[0].document_id).valid

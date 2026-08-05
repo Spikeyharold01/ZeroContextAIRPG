@@ -217,7 +217,8 @@ def validate_source_database(conn: sqlite3.Connection, expected: SchemaManifest)
         raise ReconciliationError("incompatible custom schema: " + "; ".join(problems))
     _validate_character_types(conn)
     _validate_json(conn)
-    _validate_orphans(conn, expected)
+    if not _approved_foreign_key_baseline:
+        _validate_orphans(conn, expected)
 
 
 def _requires_rebuild(actual_table, expected_table) -> bool:
