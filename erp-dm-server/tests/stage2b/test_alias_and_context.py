@@ -23,6 +23,35 @@ def test_ambiguous_alias_is_retained_with_stable_order():
     assert all(item.ambiguous for item in result)
 
 
+def test_repeated_alias_occurrences_for_one_identity_are_not_ambiguous():
+    aliases = [{"alias": "Remote Sage", "subject_type": "narrative.entity",
+                "subject_id": "10", "canonical": True}]
+    result = match_aliases("Remote Sage asks Remote Sage about the vault.", aliases)
+    assert [(item.alias, item.subject_type, item.subject_id, item.ambiguous) for item in result] == [
+        ("remote sage", "narrative.entity", "10", False)]
+
+
+def test_duplicate_sources_for_same_identity_are_not_ambiguous():
+    aliases = [
+        {"alias": "Remote Sage", "subject_type": "narrative.entity", "subject_id": "10", "canonical": True},
+        {"alias": "remote sage", "subject_type": "narrative.entity", "subject_id": "10", "canonical": False},
+        {"alias": "Ｒｅｍｏｔｅ　Ｓａｇｅ", "subject_type": "narrative.entity", "subject_id": "10", "canonical": False},
+    ]
+    result = match_aliases("I ask REMOTE SAGE.", aliases)
+    assert len(result) == 1 and result[0].subject_id == "10" and not result[0].ambiguous
+
+
+def test_same_alias_and_id_across_subject_types_remains_ambiguous():
+    aliases = [
+        {"alias": "Watcher", "subject_type": "narrative.entity", "subject_id": "10", "canonical": True},
+        {"alias": "Watcher", "subject_type": "narrative.group", "subject_id": "10", "canonical": True},
+    ]
+    result = match_aliases("Watcher waits.", aliases)
+    assert {(item.subject_type, item.subject_id) for item in result} == {
+        ("narrative.entity", "10"), ("narrative.group", "10")}
+    assert all(item.ambiguous for item in result)
+
+
 def test_context_preserves_raw_named_message_and_retrieves_relevant_fact(rules_free_campaign):
     raw = "I say to Tanis, “You get the horses and I’ll scout ahead for goblins.”"
     context = retrieve_context(str(rules_free_campaign.database_path), rules_free_campaign.campaign_id, raw, "req")
@@ -229,15 +258,20 @@ def _insert_remote_entity_state(session, entity_id, name, marker):
 
 
 def test_explicit_named_remote_state_is_promoted_and_outlives_ambiguous_hint(rules_free_campaign):
-    import sqlite3
+    import json, sqlite3
+    from database.state_repository import _hash
 
     _insert_remote_entity_state(rules_free_campaign, 10, "Remote Sage", "KEEP-NAMED-" + "x" * 220)
     conn = sqlite3.connect(rules_free_campaign.database_path)
+    alias_state = json.dumps({"aliases": ["remote sage"]}, sort_keys=True, separators=(",", ":"))
+    conn.execute("INSERT INTO state_documents(id,campaign_id,namespace,subject_type,subject_id,state_json,revision,content_hash) "
+                 "VALUES('remote-sage-alias',?,'narrative.aliases','narrative.entity','10',?,1,?)",
+                 (rules_free_campaign.campaign_id, alias_state, _hash(alias_state)))
     conn.execute("INSERT INTO characters(id,name,type,current_location_id,status,is_active) VALUES(11,'Watcher','NPC',2,'active',1)")
     conn.execute("INSERT INTO characters(id,name,type,current_location_id,status,is_active) VALUES(12,'Watcher','NPC',2,'active',1)")
     conn.commit(); conn.close()
 
-    raw = "I ask Remote Sage about the secret while Watcher listens."
+    raw = "Remote Sage asks Remote Sage about the secret while Watcher listens."
     context = retrieve_context(str(rules_free_campaign.database_path), rules_free_campaign.campaign_id, raw, "req")
     sage_match = next(match for match in context.alias_matches if match.subject_id == "10")
     assert not sage_match.ambiguous
@@ -249,12 +283,19 @@ def test_explicit_named_remote_state_is_promoted_and_outlives_ambiguous_hint(rul
 
     ambiguous_hints = [candidate for candidate in context.candidates
                        if candidate.category == "ambiguous_alias" and candidate.content["alias"] == "watcher"]
-    context.candidates = [named_state, ambiguous_hints[0]]
-    full = build_prompt(context, raw, "req", PromptLimits(10000))
-    prompt = build_prompt(context, raw, "req", PromptLimits(approximate_token_count(full) - 1))
-    assert "KEEP-NAMED" in prompt and '"alias":"watcher"' not in prompt
+    unrelated_state = ContextCandidate(
+        "generic_state", "unrelated", AuthorityLevel.GENERIC_AUTHORITATIVE,
+        "narrative.entity", "remote-unrelated", {"marker": "DROP-UNRELATED-" + "u" * 220},
+        "generic_state")
+    context.candidates = [named_state]
+    retained_budget = approximate_token_count(build_prompt(context, raw, "req", PromptLimits(10000)))
+    context.candidates = [named_state, ambiguous_hints[0], unrelated_state]
+    prompt = build_prompt(context, raw, "req", PromptLimits(retained_budget))
+    assert "KEEP-NAMED" in prompt and "DROP-UNRELATED" not in prompt
+    assert '"alias":"watcher"' not in prompt
+    assert approximate_token_count(prompt) <= retained_budget
     assert prompt_hash(prompt) == prompt_hash(
-        build_prompt(context, raw, "req", PromptLimits(approximate_token_count(full) - 1)))
+        build_prompt(context, raw, "req", PromptLimits(retained_budget)))
 
 
 def test_multiple_explicit_named_entities_promote_deterministically(rules_free_campaign):

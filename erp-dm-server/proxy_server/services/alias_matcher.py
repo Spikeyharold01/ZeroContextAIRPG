@@ -32,15 +32,19 @@ def match_aliases(raw_message: str, aliases: list[dict], *, limit: int = 20) -> 
     candidates.sort(key=lambda pair: (pair[1][0], -len(pair[0].alias), not pair[0].canonical,
                                       not pair[0].in_scene, not pair[0].at_location,
                                       pair[0].subject_type, pair[0].subject_id))
+    identities_by_alias: dict[str, set[tuple[str, str]]] = {}
+    for item, _span in candidates:
+        identities_by_alias.setdefault(item.alias, set()).add((item.subject_type, item.subject_id))
     kept: list[AliasMatch] = []
     kept_spans: list[tuple[int, int]] = []
     for candidate, span in candidates:
         if any(span[0] >= prior[0] and span[1] <= prior[1] and span != prior for prior in kept_spans):
             continue
-        if any(item.alias == candidate.alias and item.subject_id == candidate.subject_id for item in kept):
+        if any(item.alias == candidate.alias and item.subject_type == candidate.subject_type
+               and item.subject_id == candidate.subject_id for item in kept):
             continue
-        same = [item for item, _span in candidates if item.alias == candidate.alias]
-        kept.append(AliasMatch(**{**candidate.__dict__, "ambiguous": len(same) > 1}))
+        kept.append(AliasMatch(**{**candidate.__dict__,
+                                  "ambiguous": len(identities_by_alias[candidate.alias]) > 1}))
         kept_spans.append(span)
         if len(kept) == limit:
             break

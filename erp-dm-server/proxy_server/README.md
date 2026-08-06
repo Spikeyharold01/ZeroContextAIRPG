@@ -30,6 +30,8 @@ Story Time are read by exact document identity before the independently bounded
 optional-state query. Directly relevant authoritative state has stronger prompt
 retention than unrelated optional state, including state owned by an entity that
 the player identifies through an exact, unambiguous campaign alias.
+Alias ambiguity is based on distinct `(subject_type, subject_id)` identities;
+repeated occurrences or duplicate alias sources for one identity remain unambiguous.
 
 Stage 2B retrieval is deterministic relational, exact-alias, lexical, and fuzzy
 lexical retrieval. Its character-trigram comparison is lexical similarity, not
