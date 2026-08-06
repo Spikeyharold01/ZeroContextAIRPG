@@ -364,7 +364,7 @@ def open_campaign(
     if database_before.schema_version == DatabaseManager.LATEST_SCHEMA_VERSION:
         if config.db.campaign_id is None:
             raise CampaignInitializationError(
-                "version-8 campaign configuration is missing its campaign ID",
+                "version-9 campaign configuration is missing its campaign ID",
                 _details(config_path, db_path, None, database_before, actions=(
                     "Verify that this configuration and database are the intended pair.",
                     "Run repair_campaign for this explicitly selected package to copy the database ID.",
@@ -446,7 +446,7 @@ def repair_campaign(
     database = _inspect_campaign_database(config_path, db_path, config.db.campaign_id)
     if database.schema_version != DatabaseManager.LATEST_SCHEMA_VERSION or database.campaign_id is None:
         raise CampaignInitializationError(
-            "repair requires a version-8 database with one valid campaign identity",
+            "repair requires a version-9 database with one valid campaign identity",
             _details(config_path, db_path, config.db.campaign_id, database, actions=(
                 "Verify that the selected configuration and database belong together.",
                 "Open the legacy package normally to migrate it before repair.",
@@ -506,7 +506,7 @@ def repair_missing_configuration(
         raise
     if database.schema_version != DatabaseManager.LATEST_SCHEMA_VERSION:
         raise CampaignInitializationError(
-            "missing-configuration repair requires a version-8 campaign database",
+            "missing-configuration repair requires a version-9 campaign database",
             _details(config_path, db_path, None, database, actions=(
                 "Restore the campaign configuration and use open_campaign for migration.",
                 "Do not use configuration repair to bypass the version-6 migration workflow.",
@@ -516,7 +516,7 @@ def repair_missing_configuration(
         raise CampaignInitializationError(
             "campaign database must contain exactly one non-deleted campaign row",
             _details(config_path, db_path, None, database, actions=(
-                "Restore a valid version-8 campaign database or verified backup.",
+                "Restore a valid version-9 campaign database or verified backup.",
                 "Do not invent or replace the database identity.",
             )),
         )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from .common import (
     InternalStrictModel,
@@ -23,8 +23,15 @@ class StringChatMessage(OpenAIMessageModel):
     """
 
     role: Literal["system", "user", "assistant"]
-    content: Annotated[str, Field(min_length=1)]
+    content: Annotated[str, Field(min_length=1, max_length=20000)]
     name: Annotated[str, Field(min_length=1, max_length=128)] | None = None
+
+    @field_validator("content")
+    @classmethod
+    def reject_whitespace_only_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("message content must contain a non-whitespace character")
+        return value
 
 
 class ChatCompletionRequestBase(OpenAIRequestModel):

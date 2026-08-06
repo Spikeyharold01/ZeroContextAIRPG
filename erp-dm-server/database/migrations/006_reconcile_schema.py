@@ -28,6 +28,11 @@ VERSION_7_TABLES = frozenset({
     "state_idempotency",
     "state_projection_definitions",
     "state_projection_values",
+    # Later additive objects must never be reinterpreted as part of the
+    # historical version-6 contract.
+    "conversation_turn_requests",
+    "conversation_turn_commits",
+    "conversation_turn_messages",
 })
 
 

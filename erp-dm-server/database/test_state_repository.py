@@ -76,7 +76,7 @@ def test_v7_campaign_is_stable_and_configuration_mismatch_is_rejected(tmp_path):
     with pytest.raises(RuntimeError, match="does not match"):
         DatabaseManager(str(db_path), campaign_id=str(uuid4()))
     conn = second._get_connection()
-    assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 8
+    assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 9
     assert conn.execute(
         "SELECT COUNT(*) FROM campaigns WHERE lifecycle_status != 'deleted'"
     ).fetchone()[0] == 1

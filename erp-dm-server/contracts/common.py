@@ -18,7 +18,7 @@ class OpenAIRequestModel(BaseModel):
 class OpenAIMessageModel(BaseModel):
     """Strict string-message subset; tool and multimodal fields are unsupported."""
 
-    model_config = ConfigDict(strict=True, extra="forbid", str_strip_whitespace=True)
+    model_config = ConfigDict(strict=True, extra="forbid", str_strip_whitespace=False)
 
 
 class InternalStrictModel(BaseModel):
