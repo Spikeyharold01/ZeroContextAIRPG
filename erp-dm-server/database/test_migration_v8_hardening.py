@@ -245,7 +245,7 @@ def test_genuine_historical_orphan_fk_baseline_reaches_v8(tmp_path, version):
     manager = DatabaseManager(str(path))
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
-    assert conn.execute("SELECT version FROM schema_version WHERE id=1").fetchone()[0] == 8
+    assert conn.execute("SELECT version FROM schema_version WHERE id=1").fetchone()[0] == 9
     assert conn.execute("SELECT location_id FROM ambiance_state WHERE id=77").fetchone()[0] == 424242
     assert conn.execute("SELECT 1 FROM locations WHERE id=424242").fetchone() is None
     final = conn.execute("PRAGMA foreign_key_check").fetchall()

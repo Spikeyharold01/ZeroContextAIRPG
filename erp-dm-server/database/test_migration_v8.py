@@ -22,7 +22,7 @@ def test_v8_extracts_malformed_json_losslessly_without_rules_activation(tmp_path
 
     manager = DatabaseManager(str(path), campaign_id=manager.campaign_id)
     conn = manager._get_connection()
-    assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 8
+    assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 9
     assert conn.execute("SELECT rules_profile_id FROM campaigns").fetchone()[0] is None
     raw = conn.execute("SELECT state_json FROM state_documents WHERE namespace='legacy.character-plot-state.v1'").fetchone()[0]
     document = json.loads(raw)

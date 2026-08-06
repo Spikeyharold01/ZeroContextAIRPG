@@ -94,7 +94,7 @@ class EmbeddingUtils:
 class DatabaseManager:
     """SQLite persistence manager with independently versioned schema migrations."""
 
-    LATEST_SCHEMA_VERSION = 8
+    LATEST_SCHEMA_VERSION = 9
     _MIGRATION_FAILURE_INJECTOR = None
     _MIGRATIONS = {
         2: ("game_state", "game_day", "002_add_game_day.sql"),
@@ -104,6 +104,7 @@ class DatabaseManager:
         6: (None, None, "006_reconcile_schema.py"),
         7: (None, None, "007_generic_state_foundation.py"),
         8: (None, None, "008_legacy_state_extraction.py"),
+        9: (None, None, "009_conversation_turns.py"),
     }
 
     # ---------- WHITELISTS for dynamic update methods ----------
@@ -253,6 +254,9 @@ class DatabaseManager:
             if current_version < 8 and self._database_has_user_data(conn):
                 self._create_verified_backup("pre-v8")
 
+            if current_version < 9 and self._database_has_user_data(conn):
+                self._create_verified_backup("pre-v9")
+
             conn.execute("BEGIN IMMEDIATE")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS schema_version (
@@ -284,11 +288,14 @@ class DatabaseManager:
                     migration.migrate(conn, self.configured_campaign_id, foreign_keys_before=[{
                         "table": row[0], "rowid": row[1], "parent": row[2], "fkid": row[3]
                     } for row in approved_foreign_key_baseline])
+                elif version == 9:
+                    migration = self._load_controlled_migration(version)
+                    migration.migrate(conn)
                 elif self._table_exists(conn, table) and not self._column_exists(conn, table, column):
                     migration_path = os.path.join(migrations_dir, filename)
                     with open(migration_path, "r", encoding="utf-8") as migration_file:
                         conn.execute(migration_file.read())
-                if version == 7:
+                if version in {7, 9}:
                     foreign_key_failures = [tuple(row) for row in conn.execute("PRAGMA foreign_key_check").fetchall()]
                     if foreign_key_failures != approved_foreign_key_baseline:
                         raise RuntimeError(
@@ -352,6 +359,8 @@ class DatabaseManager:
             elif version == 7:
                 module._before_validation = lambda: failure_injector("generic_state_v7")
             elif version == 8:
+                module._failure_injector = failure_injector
+            elif version == 9:
                 module._failure_injector = failure_injector
         return module
 
