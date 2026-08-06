@@ -28,7 +28,8 @@ multi-player actor selection is deferred.
 Required active-scene state, dialogue focus, active-player memory, and campaign
 Story Time are read by exact document identity before the independently bounded
 optional-state query. Directly relevant authoritative state has stronger prompt
-retention than unrelated optional state.
+retention than unrelated optional state, including state owned by an entity that
+the player identifies through an exact, unambiguous campaign alias.
 
 Stage 2B retrieval is deterministic relational, exact-alias, lexical, and fuzzy
 lexical retrieval. Its character-trigram comparison is lexical similarity, not

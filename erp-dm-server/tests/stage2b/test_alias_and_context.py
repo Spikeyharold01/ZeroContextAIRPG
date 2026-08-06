@@ -212,3 +212,85 @@ def test_unrelated_paraphrase_is_not_claimed_as_semantic_retrieval(rules_free_ca
                                "Celestial harmonies illuminate abstract philosophy.", "req")
     assert context.semantic_retrieval == "unavailable"
     assert all(candidate.semantic_score is None for candidate in context.candidates)
+
+
+def _insert_remote_entity_state(session, entity_id, name, marker):
+    import json, sqlite3
+    from database.state_repository import _hash
+
+    state = json.dumps({"marker": marker}, sort_keys=True, separators=(",", ":"))
+    conn = sqlite3.connect(session.database_path)
+    conn.execute("INSERT INTO characters(id,name,type,current_location_id,status,is_active) "
+                 "VALUES(?,?, 'NPC',2,'active',1)", (entity_id, name))
+    conn.execute("INSERT INTO state_documents(id,campaign_id,namespace,subject_type,subject_id,state_json,revision,content_hash) "
+                 "VALUES(?,?,?,?,?,?,1,?)", (f"remote-state-{entity_id}", session.campaign_id,
+                 "narrative.world", "narrative.entity", str(entity_id), state, _hash(state)))
+    conn.commit(); conn.close()
+
+
+def test_explicit_named_remote_state_is_promoted_and_outlives_ambiguous_hint(rules_free_campaign):
+    import sqlite3
+
+    _insert_remote_entity_state(rules_free_campaign, 10, "Remote Sage", "KEEP-NAMED-" + "x" * 220)
+    conn = sqlite3.connect(rules_free_campaign.database_path)
+    conn.execute("INSERT INTO characters(id,name,type,current_location_id,status,is_active) VALUES(11,'Watcher','NPC',2,'active',1)")
+    conn.execute("INSERT INTO characters(id,name,type,current_location_id,status,is_active) VALUES(12,'Watcher','NPC',2,'active',1)")
+    conn.commit(); conn.close()
+
+    raw = "I ask Remote Sage about the secret while Watcher listens."
+    context = retrieve_context(str(rules_free_campaign.database_path), rules_free_campaign.campaign_id, raw, "req")
+    sage_match = next(match for match in context.alias_matches if match.subject_id == "10")
+    assert not sage_match.ambiguous
+    assert all(match.ambiguous for match in context.alias_matches if match.alias == "watcher")
+    named_state = next(candidate for candidate in context.candidates
+                       if candidate.source_id.endswith("state:remote-state-10"))
+    assert named_state.category == "direct_generic_state"
+    assert named_state.direct_entity_relevance == 1.0 and named_state.exact_alias_match == 1.0
+
+    ambiguous_hints = [candidate for candidate in context.candidates
+                       if candidate.category == "ambiguous_alias" and candidate.content["alias"] == "watcher"]
+    context.candidates = [named_state, ambiguous_hints[0]]
+    full = build_prompt(context, raw, "req", PromptLimits(10000))
+    prompt = build_prompt(context, raw, "req", PromptLimits(approximate_token_count(full) - 1))
+    assert "KEEP-NAMED" in prompt and '"alias":"watcher"' not in prompt
+    assert prompt_hash(prompt) == prompt_hash(
+        build_prompt(context, raw, "req", PromptLimits(approximate_token_count(full) - 1)))
+
+
+def test_multiple_explicit_named_entities_promote_deterministically(rules_free_campaign):
+    _insert_remote_entity_state(rules_free_campaign, 10, "Remote Sage", "SAGE-STATE")
+    _insert_remote_entity_state(rules_free_campaign, 11, "Distant Oracle", "ORACLE-STATE")
+    raw = "Remote Sage consults Distant Oracle."
+    first = retrieve_context(str(rules_free_campaign.database_path), rules_free_campaign.campaign_id, raw, "req")
+    second = retrieve_context(str(rules_free_campaign.database_path), rules_free_campaign.campaign_id, raw, "req")
+    promoted = [candidate for candidate in first.candidates
+                if candidate.source_id.endswith(("state:remote-state-10", "state:remote-state-11"))]
+    assert len(promoted) == 2
+    assert all(candidate.category == "direct_generic_state" and candidate.exact_alias_match == 1.0
+               for candidate in promoted)
+    assert [candidate.source_id for candidate in first.candidates] == [candidate.source_id for candidate in second.candidates]
+
+
+def test_ambiguous_alias_does_not_promote_generic_state(rules_free_campaign):
+    import sqlite3
+
+    _insert_remote_entity_state(rules_free_campaign, 10, "Watcher", "AMBIGUOUS-STATE")
+    conn = sqlite3.connect(rules_free_campaign.database_path)
+    conn.execute("INSERT INTO characters(id,name,type,current_location_id,status,is_active) VALUES(11,'Watcher','NPC',2,'active',1)")
+    conn.commit(); conn.close()
+    context = retrieve_context(str(rules_free_campaign.database_path), rules_free_campaign.campaign_id,
+                               "I ask Watcher.", "req")
+    state = next(candidate for candidate in context.candidates
+                 if candidate.source_id.endswith("state:remote-state-10"))
+    assert all(match.ambiguous for match in context.alias_matches if match.alias == "watcher")
+    assert state.category == "generic_state" and state.exact_alias_match == 0.0
+
+
+def test_fuzzy_similarity_alone_does_not_promote_generic_state(rules_free_campaign):
+    _insert_remote_entity_state(rules_free_campaign, 10, "Remote Sage", "FUZZY-ONLY-STATE")
+    context = retrieve_context(str(rules_free_campaign.database_path), rules_free_campaign.campaign_id,
+                               "I consult a distant scholarly figure.", "req")
+    state = next(candidate for candidate in context.candidates
+                 if candidate.source_id.endswith("state:remote-state-10"))
+    assert not any(match.subject_id == "10" for match in context.alias_matches)
+    assert state.category == "generic_state" and state.exact_alias_match == 0.0

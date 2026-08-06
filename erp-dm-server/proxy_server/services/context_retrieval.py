@@ -153,6 +153,8 @@ def retrieve_context(db_path: str, campaign_id: str, raw_message: str, request_i
                                         "subject_id": row["subject_id"], "canonical": False})
         matches = match_aliases(raw_message, aliases, limit=candidate_limit)
         matched_aliases = sorted({item.alias for item in matches}, key=lambda value: (-len(value), value))
+        exact_alias_subjects = {(item.subject_type, item.subject_id) for item in matches
+                                if not item.ambiguous}
 
         fact_rows = conn.execute(
             "SELECT id,character_id,fact_text,importance,confidence,source_type,created_turn,last_referenced_turn "
@@ -214,15 +216,22 @@ def retrieve_context(db_path: str, campaign_id: str, raw_message: str, request_i
             if row["namespace"] in {"narrative.aliases", "narrative.dialogue", "narrative.memory", "narrative.time"}:
                 continue
             retrieval_order += 1
+            subject_identity = (row["subject_type"], row["subject_id"])
+            exact_alias_relevance = subject_identity in exact_alias_subjects
+            participant_relevance = row["subject_id"] in {p["id"] for p in participants}
+            direct_relevance = (row["subject_id"] in {player_id, dialogue_subject,
+                                str(location["id"]) if location else ""}
+                                or participant_relevance or exact_alias_relevance)
             candidates.append(ContextCandidate("generic_state", f"{campaign_id}:state:{row['id']}",
                 AuthorityLevel.GENERIC_AUTHORITATIVE, row["subject_type"], row["subject_id"],
                 {"namespace": row["namespace"], "state": json.loads(row["state_json"])},
-                "direct_generic_state" if (row["subject_id"] in {player_id, dialogue_subject,
-                    str(location["id"]) if location else ""} or row["subject_id"] in {p["id"] for p in participants})
-                else "generic_state",
-                direct_entity_relevance=1.0 if row["subject_id"] == player_id or row["subject_id"] in {p["id"] for p in participants} else 0.0,
+                "direct_generic_state" if direct_relevance else "generic_state",
+                direct_entity_relevance=1.0 if (row["subject_id"] == player_id
+                                                or participant_relevance
+                                                or exact_alias_relevance) else 0.0,
                 current_scene_relevance=1.0 if row["subject_id"] == dialogue_subject else 0.0,
                 current_location_relevance=1.0 if location and row["subject_id"] == str(location["id"]) else 0.0,
+                exact_alias_match=1.0 if exact_alias_relevance else 0.0,
                 retrieval_order=retrieval_order))
         for match in matches:
             retrieval_order += 1
