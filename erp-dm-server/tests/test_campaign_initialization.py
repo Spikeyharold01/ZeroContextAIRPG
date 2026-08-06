@@ -123,7 +123,7 @@ def test_mismatch_fails_before_database_mutation_with_structured_paths(tmp_path)
     assert error.details.database_path == str(session.database_path)
     assert error.details.configured_campaign_id == wrong_id
     assert error.details.database_campaign_id == session.campaign_id
-    assert error.details.schema_version == 8
+    assert error.details.schema_version == 9
     assert error.details.migration_occurred is False
     assert "belong together" in str(error)
     assert session.database_path.read_bytes() == before
@@ -284,7 +284,7 @@ def test_missing_config_repair_rejects_version_6_and_directs_to_open(tmp_path):
             database_path=db_path,
             configuration_path=tmp_path / "legacy" / "engine.toml",
         )
-    assert "version-8" in captured.value.reason
+    assert "version-9" in captured.value.reason
     assert "open_campaign" in str(captured.value)
     assert db_path.read_bytes() == before
 

@@ -259,6 +259,40 @@ class StateRepository:
         turn_number: int | None = None,
     ) -> StateWriteResult:
         self._ensure_open()
+        conn = self._connection()
+        try:
+            self._begin_with_retry(conn)
+            result = self.apply_patch_in_transaction(
+                conn, patch, request_id=request_id, producer_type=producer_type,
+                producer_id=producer_id, turn_number=turn_number,
+            )
+            conn.commit()
+            return result
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def apply_patch_in_transaction(
+        self,
+        conn: sqlite3.Connection,
+        patch: StatePatch,
+        *,
+        request_id: str | None = None,
+        producer_type: str = "core.persistence",
+        producer_id: str | None = None,
+        turn_number: int | None = None,
+        failure_injector: Callable[[str], None] | None = None,
+    ) -> StateWriteResult:
+        """Apply one patch using a caller-owned transaction without committing.
+
+        Conversation-turn persistence uses this boundary so document changes,
+        audit rows, messages, idempotency, and the accepted exchange counter are
+        committed or rolled back together. Public ``apply_patch`` retains its
+        existing independently transactional behavior.
+        """
+        self._ensure_open()
         if not isinstance(patch, StatePatch):
             try:
                 patch = StatePatch.model_validate(patch)
@@ -273,69 +307,65 @@ class StateRepository:
         target_fingerprint = _hash(canonical_json(target.model_dump(mode="json")))
         started = time.monotonic()
 
-        conn = self._connection()
-        try:
-            self._begin_with_retry(conn)
-            replay = conn.execute(
+        replay = conn.execute(
                 "SELECT target_fingerprint, request_hash, response_json "
                 "FROM state_idempotency WHERE campaign_id=? AND idempotency_key=?",
                 (self.campaign_id, str(patch.idempotency_key)),
             ).fetchone()
-            if replay is not None:
-                if replay["target_fingerprint"] != target_fingerprint or replay["request_hash"] != request_hash:
-                    raise StateIdempotencyConflict("idempotency key was used for a different request")
-                response = json.loads(replay["response_json"])
-                conn.commit()
-                return StateWriteResult(**response, replayed=True)
+        if replay is not None:
+            if replay["target_fingerprint"] != target_fingerprint or replay["request_hash"] != request_hash:
+                raise StateIdempotencyConflict("idempotency key was used for a different request")
+            response = json.loads(replay["response_json"])
+            return StateWriteResult(**response, replayed=True)
 
-            row = conn.execute(
+        row = conn.execute(
                 "SELECT * FROM state_documents WHERE campaign_id=? AND namespace=? "
                 "AND subject_type=? AND subject_id=?",
                 (self.campaign_id, target.namespace, target.subject_type, target.subject_id),
             ).fetchone()
-            if row is None:
-                document, revision, document_id = {}, 0, str(uuid4())
-                prior_json = "{}"
-                prior_hash = _hash(prior_json)
-            else:
-                if row["lifecycle_status"] != "active":
-                    raise StatePersistenceError("deleted state documents cannot be patched")
-                try:
-                    document = json.loads(row["state_json"])
-                except (TypeError, ValueError) as error:
-                    raise StateIntegrityError("stored state JSON is malformed") from error
-                if type(document) is not dict:
-                    raise StateIntegrityError("stored state root is not an object")
-                prior_json = canonical_json(document)
-                prior_hash = _hash(prior_json)
-                if row["state_json"] != prior_json or row["content_hash"] != prior_hash:
-                    raise StateIntegrityError("stored state content hash or canonical JSON does not match")
-                revision, document_id = row["revision"], row["id"]
+        if row is None:
+            document, revision, document_id = {}, 0, str(uuid4())
+            prior_json = "{}"
+            prior_hash = _hash(prior_json)
+        else:
+            if row["lifecycle_status"] != "active":
+                raise StatePersistenceError("deleted state documents cannot be patched")
+            try:
+                document = json.loads(row["state_json"])
+            except (TypeError, ValueError) as error:
+                raise StateIntegrityError("stored state JSON is malformed") from error
+            if type(document) is not dict:
+                raise StateIntegrityError("stored state root is not an object")
+            prior_json = canonical_json(document)
+            prior_hash = _hash(prior_json)
+            if row["state_json"] != prior_json or row["content_hash"] != prior_hash:
+                raise StateIntegrityError("stored state content hash or canonical JSON does not match")
+            revision, document_id = row["revision"], row["id"]
 
-            result, next_revision = apply_state_patch(document, revision, patch)
-            state_json, result_hash = self._validate_document(result, len(prior_json.encode("utf-8")))
-            budget = self.settings.patch.max_apply_milliseconds
-            if budget is not None and (time.monotonic() - started) * 1000 > budget:
-                raise StateLimitError("patch exceeded configured cooperative apply-time budget")
+        result, next_revision = apply_state_patch(document, revision, patch)
+        state_json, result_hash = self._validate_document(result, len(prior_json.encode("utf-8")))
+        budget = self.settings.patch.max_apply_milliseconds
+        if budget is not None and (time.monotonic() - started) * 1000 > budget:
+            raise StateLimitError("patch exceeded configured cooperative apply-time budget")
 
-            if row is None:
-                conn.execute(
+        if row is None:
+            conn.execute(
                     "INSERT INTO state_documents "
                     "(id,campaign_id,namespace,subject_type,subject_id,state_json,revision,content_hash,metadata_json) "
                     "VALUES (?,?,?,?,?,?,?,?,?)",
                     (document_id, self.campaign_id, target.namespace, target.subject_type,
                      target.subject_id, state_json, next_revision, result_hash, "{}"),
                 )
-            else:
-                changed = conn.execute(
+        else:
+            changed = conn.execute(
                     "UPDATE state_documents SET state_json=?,revision=?,content_hash=?,updated_at=CURRENT_TIMESTAMP "
                     "WHERE id=? AND campaign_id=? AND revision=? AND lifecycle_status='active'",
                     (state_json, next_revision, result_hash, document_id, self.campaign_id, revision),
                 ).rowcount
-                if changed != 1:
-                    raise StatePatchConflict("document revision changed concurrently")
+            if changed != 1:
+                raise StatePatchConflict("document revision changed concurrently")
 
-            conn.execute(
+        conn.execute(
                 "INSERT INTO state_patch_log "
                 "(id,campaign_id,state_document_id,idempotency_key,request_id,producer_type,producer_id,"
                 "turn_number,base_revision,prior_revision,resulting_revision,patch_json,patch_hash,"
@@ -344,27 +374,27 @@ class StateRepository:
                  producer_type, producer_id, turn_number, patch.base_revision, revision, next_revision,
                  patch_json, request_hash, prior_hash, result_hash),
             )
-            response = {
+        if failure_injector is not None:
+            failure_injector("state_patch_audit")
+        response = {
                 "document_id": document_id,
                 "revision": next_revision,
                 "content_hash": result_hash,
             }
-            conn.execute(
+        conn.execute(
                 "INSERT INTO state_idempotency "
                 "(campaign_id,idempotency_key,target_fingerprint,request_hash,state_document_id,"
                 "resulting_revision,response_json) VALUES (?,?,?,?,?,?,?)",
                 (self.campaign_id, str(patch.idempotency_key), target_fingerprint, request_hash,
                  document_id, next_revision, canonical_json(response)),
             )
-            self._update_projections(conn, document_id, target.namespace, target.subject_type,
-                                     result, next_revision)
-            conn.commit()
-            return StateWriteResult(**response, replayed=False)
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        if failure_injector is not None:
+            failure_injector("state_idempotency")
+        self._update_projections(conn, document_id, target.namespace, target.subject_type,
+                                 result, next_revision)
+        if failure_injector is not None:
+            failure_injector("projection_update")
+        return StateWriteResult(**response, replayed=False)
 
     def _begin_with_retry(self, conn: sqlite3.Connection) -> None:
         attempts = self.settings.sqlite.retry_count + 1
