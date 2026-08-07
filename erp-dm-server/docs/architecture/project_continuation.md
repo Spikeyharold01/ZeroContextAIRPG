@@ -2,7 +2,7 @@
 
 **Status:** Canonical project handover
 **Repository branch represented:** main
-**Last verified main commit:** ec4145cb5d388114fd4c6d88ccc7853722af2c31
+**Last verified commit:** ec4145cb5d388114fd4c6d88ccc7853722af2c31
 **Schema version:** 009
 **Last updated:** 2026-08-07
 **Last completed stage:** 2B
@@ -47,7 +47,7 @@ complete rules-free operation;
 
 optional rules systems;
 
-required semantic Embedding Service for normal-quality operation, with deterministic lexical/relational degraded fallback;
+optional derived embeddings;
 
 completed replay without model calls or persistence;
 
@@ -93,11 +93,7 @@ real orchestration remains planned.
 Embedding Service
 Responsibility:
 
-Provide optional semantic retrieval by generating and comparing embeddings.
-
-Embeddings are derived campaign data, never authoritative state.
-
-The engine must continue operating correctly when the embedding service is unavailable.
+optional future derived semantic retrieval.
 
 Current status:
 
@@ -263,8 +259,6 @@ configurable local Embedding Service and reference embedding-model integration;
 
 embedding-model swapping through configuration;
 
-embedding model metadata (identifier, version, dimension, preprocessing version);
-
 semantic vector storage;
 
 semantic vector retrieval;
@@ -401,7 +395,7 @@ more than one distinct (subject_type, subject_id)
 for the same normalized alias
 Repeated occurrences and duplicate sources for one identity do not create ambiguity.
 
-Embedding-based semantic retrieval is intentionally deferred to Stage 2C. Stage 2B retrieval is entirely deterministic and does not use embeddings.
+Embedding-based semantic retrieval remains future Stage 2C work.
 
 Prompt Position
 Mandatory prompt core includes:
@@ -443,8 +437,6 @@ full prompt below approximately 4,000 tokens;
 
 reusable Character Profile around 400 tokens.
 
-The Character Profile is generated once during Character Card import and replaces repeated raw Character Card content in subsequent prompts.
-
 ## Test Position
 
 Final Stage 2B pre-merge review at SHA
@@ -484,8 +476,7 @@ None currently known from Stage 2B.
 - Implement a configurable local embedding-model adapter.
 - Add persistent derived embedding storage and stale-embedding detection.
 - Preserve deterministic lexical/relational fallback when embeddings are unavailable.
-- Support configurable embedding models rather than hard-coding a single implementation.
-- Record embedding model metadata so incompatible vectors become stale automatically after model changes.
+
 ### Minor follow-ups
 
 - Resolve the Starlette/httpx TestClient deprecation warning.
@@ -548,10 +539,6 @@ erp-dm-server/proxy_server/README.md
 
 erp-dm-server/readme.md
 
-erp-dm-server/docs/architecture/project_continuation.md
-
-erp-dm-server/docs/architecture/living-architecture/
-
 .github/workflows/test.yml
 
 Settled Architectural Decisions
@@ -581,13 +568,9 @@ syntax-only, one-attempt repair;
 
 rules remain optional;
 
-embeddings remain derived and non-authoritative, but an Embedding Service is required for normal supported operation;
+embeddings remain optional and derived;
 
-embedding implementations must be replaceable through an application-owned EmbeddingService interface;
-
-embedding models are configuration, not architecture;
-
-relational, alias, lexical and fuzzy-lexical retrieval remain available as a degraded fallback when the Embedding Service is temporarily unavailable;
+no embedding requirement for basic operation;
 
 fuzzy lexical matching is not semantic retrieval;
 
